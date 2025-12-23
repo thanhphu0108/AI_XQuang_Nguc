@@ -17,7 +17,7 @@ from openai import OpenAI
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital (V21.5 - Stable)",
+    page_title="AI Hospital (V21.6 - Full Process)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -28,12 +28,11 @@ st.markdown("""
 <style>
     .main { background-color: #f4f6f9; }
     .report-container { background-color: white; padding: 40px; border-radius: 5px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); font-family: 'Times New Roman', serif; color: #000; font-size: 16px; line-height: 1.5; }
-    .hospital-header { text-align: center; border-bottom: 2px solid #002f6c; padding-bottom: 10px; margin-bottom: 20px; }
-    .section-header { background-color: #eee; padding: 8px; border-left: 5px solid #002f6c; margin: 20px 0 15px 0; font-weight: bold; color: #002f6c; text-transform: uppercase; }
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 45px; }
     .gpt-suggestion { background-color: #e8f5e9; padding: 15px; border-radius: 5px; border-left: 5px solid #4caf50; margin-bottom: 10px; }
     .feedback-box { background-color: #fff3e0; padding: 15px; border-radius: 5px; border: 1px solid #ffb74d; margin-top: 10px; }
-    .info-table td { padding: 4px 2px; vertical-align: top; }
+    .step-badge { background-color: #002f6c; color: white; padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; }
+    .prev-result { background-color: #eeeeee; padding: 10px; border-radius: 5px; margin-bottom: 15px; border-left: 5px solid #9e9e9e; color: #555; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -93,8 +92,8 @@ def ask_gpt_for_label(api_key, image_path, clinical_info=""):
         base64_image = encode_image_to_base64(image_path)
         labels_str = ", ".join([f"'{l}'" for l in ALLOWED_LABELS])
         prompt = f"""
-        Vai trò: Bác sĩ chẩn đoán hình ảnh chuyên sâu.
-        Thông tin lâm sàng: {clinical_info}
+        Vai trò: Bác sĩ chẩn đoán hình ảnh.
+        Lâm sàng: {clinical_info}
         Nhiệm vụ:
         1. Phân tích X-quang.
         2. CHỈ CHỌN nhãn từ danh sách: [{labels_str}].
@@ -169,7 +168,7 @@ def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
 def update_feedback_slot(selected_id, feedback_value, label_value, slot, gpt_reason=""):
     try:
         df = pd.read_csv(LOG_FILE)
-        df = df.fillna("") # Fix lỗi NaN
+        df = df.fillna("")
         df['ID'] = df['ID'].astype(str)
         selected_id = str(selected_id)
         if slot == 1:
@@ -188,7 +187,6 @@ def get_final_label(row):
     fb2 = str(row["Feedback_2"]) if pd.notna(row["Feedback_2"]) else ""
     lbl1 = str(row["Label_1"]) if pd.notna(row["Label_1"]) else ""
     fb1 = str(row["Feedback_1"]) if pd.notna(row["Feedback_1"]) else ""
-
     if lbl2 != "" and fb2 != "Chưa đánh giá": return lbl2
     elif lbl1 != "" and fb1 != "Chưa đánh giá": return lbl1
     return ""
@@ -361,7 +359,7 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
     st.title("📂 HỘI CHẨN & AI GÁN NHÃN")
     if os.path.exists(LOG_FILE):
         df = pd.read_csv(LOG_FILE)
-        # SỬA LỖI NAN: Đảm bảo không có ô trống gây crash
+        # FIX CRASH: Lấp đầy các ô trống
         df = df.fillna("")
         
         df['ID'] = df['ID'].astype(str)
@@ -379,6 +377,7 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                 st.warning(f"AI Kết luận: {record['Result']}")
                 st.markdown("---")
                 
+                # GPT & Clinical Input
                 gpt_labels, gpt_reason = [], ""
                 clinical_input = st.text_input("💬 Thông tin lâm sàng (Gửi kèm cho AI):", placeholder="Ví dụ: Ho ra máu, sốt về chiều...")
                 
@@ -393,45 +392,61 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                             else: st.error("ChatGPT không trả về nhãn.")
                 else: st.warning("⚠️ Nhập API Key bên trái để dùng ChatGPT.")
 
-                # SỬA LỖI XỬ LÝ CHUỖI LABEL (Ép kiểu string an toàn)
-                fb1 = str(record.get("Feedback_1", ""))
+                # ----- LOGIC HỘI CHẨN 2 LẦN (RESTORED) -----
+                fb1 = str(record.get("Feedback_1", "Chưa đánh giá"))
+                fb2 = str(record.get("Feedback_2", "Chưa đánh giá"))
                 lb1 = str(record.get("Label_1", ""))
+                lb2 = str(record.get("Label_2", ""))
                 
-                # Logic lấy label gợi ý
+                # Feedback options
+                fb_options = ["Chưa đánh giá", "✅ Đồng thuận (Đúng)", "⚠️ Dương tính giả", "⚠️ Âm tính giả"]
+
+                # Logic tự động điền nhãn từ GPT hoặc dữ liệu cũ
                 if gpt_labels:
-                    default_labels = gpt_labels
-                elif lb1 and lb1 != "nan": # Kiểm tra kỹ hơn
-                    default_labels = lb1.split("; ")
+                    current_defaults = gpt_labels
                 else:
-                    default_labels = []
+                    current_defaults = []
+
+                # --- STEP 1: Đánh giá Lần 1 ---
+                if fb1 == "Chưa đánh giá" or fb1 == "":
+                    st.markdown('<div class="step-badge">🔹 ĐÁNH GIÁ LẦN 1</div>', unsafe_allow_html=True)
+                    
+                    if not current_defaults and lb1: current_defaults = [l for l in lb1.split("; ") if l]
+                    valid_defaults = [l for l in current_defaults if l in ALLOWED_LABELS]
+
+                    new_fb1 = st.radio("Đánh giá của BS 1:", fb_options, index=0)
+                    new_lbl1 = st.multiselect("Bệnh lý xác định (BS 1):", ALLOWED_LABELS, default=valid_defaults)
+                    
+                    if st.button("💾 LƯU LẦN 1"):
+                        update_feedback_slot(selected_id, new_fb1, "; ".join(new_lbl1), 1, gpt_reason)
+                        st.success("Đã lưu Lần 1!"); time.sleep(0.5); st.rerun()
+
+                # --- STEP 2: Đánh giá Lần 2 (Nếu Lần 1 đã có) ---
+                elif fb2 == "Chưa đánh giá" or fb2 == "":
+                    st.markdown(f'<div class="prev-result"><b>👤 Kết quả Lần 1:</b> {fb1}<br><b>🏷️ Nhãn Lần 1:</b> {lb1}</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="step-badge" style="background-color:#c62828;">🔸 ĐÁNH GIÁ LẦN 2 (QUYẾT ĐỊNH)</div>', unsafe_allow_html=True)
+                    
+                    if not current_defaults and lb2: current_defaults = [l for l in lb2.split("; ") if l]
+                    # Nếu chưa có nhãn L2 thì lấy gợi ý từ L1
+                    if not current_defaults and lb1: current_defaults = [l for l in lb1.split("; ") if l]
+                    
+                    valid_defaults = [l for l in current_defaults if l in ALLOWED_LABELS]
+
+                    new_fb2 = st.radio("Đánh giá của BS 2 (Chốt):", fb_options, index=0)
+                    new_lbl2 = st.multiselect("Bệnh lý xác định (BS 2):", ALLOWED_LABELS, default=valid_defaults)
+                    
+                    if st.button("💾 LƯU LẦN 2 (CHỐT)"):
+                        update_feedback_slot(selected_id, new_fb2, "; ".join(new_lbl2), 2, gpt_reason)
+                        st.success("Đã lưu Lần 2 (Chốt)!"); time.sleep(0.5); st.rerun()
                 
-                valid_defaults = [l for l in default_labels if l in ALLOWED_LABELS]
-                
-                st.write("### 📝 Kết luận chuyên môn (Ground Truth):")
-                
-                feedback_options = [
-                    "Chưa đánh giá", 
-                    "✅ Đồng thuận (Đúng)", 
-                    "⚠️ Dương tính giả (AI báo bệnh - Thực tế không)", 
-                    "⚠️ Âm tính giả (AI bỏ sót - Thực tế có bệnh)"
-                ]
-                
-                # Index mặc định
-                idx = 0
-                if "Đồng thuận" in fb1: idx = 1
-                elif "Dương tính giả" in fb1: idx = 2
-                elif "Âm tính giả" in fb1: idx = 3
-                
-                new_fb = st.radio("Đánh giá kết quả của AI (YOLO):", feedback_options, index=idx)
-                
-                st.markdown('<div class="feedback-box"><b>📌 CHỌN NHÃN ĐÚNG (Để train lại):</b><br>Hãy chọn chính xác các bệnh lý mà bệnh nhân đang mắc phải.</div>', unsafe_allow_html=True)
-                
-                final_labels = st.multiselect("Bệnh lý xác định:", ALLOWED_LABELS, default=valid_defaults)
-                
-                if st.button("💾 LƯU KẾT QUẢ (TRAINING DATA)"):
-                    lbl_str = "; ".join(final_labels)
-                    update_feedback_slot(selected_id, new_fb, lbl_str, 1, gpt_reason)
-                    st.success("Đã lưu vào cơ sở dữ liệu huấn luyện!"); time.sleep(0.5); st.rerun()
+                # --- DONE: Đã xong cả 2 ---
+                else:
+                    st.success("✅ Hồ sơ đã hoàn tất hội chẩn 2 bước.")
+                    st.info(f"Lần 1: {fb1} ({lb1})")
+                    st.info(f"Lần 2: {fb2} ({lb2})")
+                    if st.button("✏️ Chỉnh sửa lại Lần 2"):
+                        update_feedback_slot(selected_id, "Chưa đánh giá", "", 2)
+                        st.rerun()
 
 elif mode == "🛠️ Xuất Dataset":
     st.title("🛠️ XUẤT DATASET")
@@ -441,7 +456,6 @@ elif mode == "🛠️ Xuất Dataset":
             st.success("✅ Đã mở khóa Developer Mode!")
             if os.path.exists(LOG_FILE):
                 df = pd.read_csv(LOG_FILE)
-                # SỬA LỖI NAN KHI XUẤT
                 df = df.fillna("")
                 df["Final_Label"] = df.apply(get_final_label, axis=1)
                 df["Select"] = False
