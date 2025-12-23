@@ -15,7 +15,7 @@ import random
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital (V18.0 - Full Visual)",
+    page_title="AI Hospital (Dataset Intelligence)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -43,7 +43,6 @@ TRAIN_DATA_DIR = os.path.join(BASE_PATH, "dataset_yolo_ready")
 
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
-# DANH SÁCH BỆNH LÝ (ĐỂ TRAIN MODEL BỆNH)
 LABEL_MAP = {
     "Bình thường (Normal)": "Normal",
     "Bóng tim to (Cardiomegaly)": "Cardiomegaly",
@@ -159,28 +158,47 @@ def update_feedback_slot(selected_id, feedback_value, label_value, slot):
         return True
     except: return False
 
-# --- HÀM VẼ GIẢI PHẪU LÊN ẢNH (VISUALIZE ANATOMY) ---
-def visualize_anatomy(img_path):
-    if not os.path.exists(img_path): return None, "Không tìm thấy ảnh"
+# --- HÀM TÍNH TOÁN NHÃN CHỐT (PRIORITY LOGIC) ---
+def get_final_label(row):
+    # Ưu tiên Label 2 nếu có
+    if pd.notna(row["Label_2"]) and row["Label_2"] != "" and row["Feedback_2"] != "Chưa đánh giá":
+        return row["Label_2"]
+    # Nếu không, lấy Label 1
+    elif pd.notna(row["Label_1"]) and row["Label_1"] != "" and row["Feedback_1"] != "Chưa đánh giá":
+        return row["Label_1"]
+    return ""
+
+def preview_auto_label(df_selected):
+    if df_selected.empty: return None, "Chưa chọn dòng nào!"
+    random_row = df_selected.sample(1).iloc[0]
+    img_path = os.path.join(IMAGES_DIR, random_row["Image_Path"])
+    if not os.path.exists(img_path): return None, "Không tìm thấy file ảnh gốc!"
+    
     img = cv2.imread(img_path)
     anatomy_model = MODELS.get("ANATOMY")
     
-    detected_parts = []
+    detected_classes = [] 
     if anatomy_model:
         results = anatomy_model(img, verbose=False)[0]
         for box in results.boxes:
             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
             cls_id = int(box.cls[0])
             label_name = anatomy_model.names[cls_id]
-            detected_parts.append(label_name)
-            
-            # Vẽ khung màu xanh lá
+            detected_classes.append(label_name)
             cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(img, label_name, (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB), list(set(detected_parts))
+            cv2.putText(img, f"{label_name}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    
+    # Lấy nhãn chốt để hiển thị
+    final_label = get_final_label(random_row)
+    
+    msg = f"""
+    🖼️ **File:** {random_row['Image_Path']}
+    🏆 **Nhãn chốt (Final Label):** {final_label if final_label else '⚠️ Chưa gán nhãn'}
+    🤖 **AI Giải phẫu:** {', '.join(set(detected_classes))}
+    """
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB), msg
 
-# --- HÀM XUẤT DATASET ---
+# --- HÀM XUẤT DATASET (OPTIMIZED) ---
 def export_selected_data(df_selected, use_anatomy_auto_label=True):
     count = 0
     if os.path.exists(TRAIN_DATA_DIR): shutil.rmtree(TRAIN_DATA_DIR)
@@ -188,7 +206,13 @@ def export_selected_data(df_selected, use_anatomy_auto_label=True):
     os.makedirs(os.path.join(TRAIN_DATA_DIR, "images"), exist_ok=True)
     os.makedirs(os.path.join(TRAIN_DATA_DIR, "labels"), exist_ok=True)
     
+    # Tạo cấu trúc thư mục phân loại (nếu muốn dùng yolo classify)
+    for en_label in LABEL_MAP.values():
+        os.makedirs(os.path.join(TRAIN_DATA_DIR, "classified", en_label), exist_ok=True)
+    
     anatomy_model = MODELS.get("ANATOMY")
+    
+    # Tạo file classes.txt
     if anatomy_model:
         with open(os.path.join(TRAIN_DATA_DIR, "classes.txt"), "w") as f:
             for idx, name in anatomy_model.names.items(): f.write(f"{name}\n")
@@ -197,16 +221,32 @@ def export_selected_data(df_selected, use_anatomy_auto_label=True):
     total = len(df_selected)
     
     for idx, (index, row) in enumerate(df_selected.iterrows()):
-        labels_str = str(row.get("Label_2") if row["Feedback_2"] != "Chưa đánh giá" else row.get("Label_1", ""))
+        # ÁP DỤNG LOGIC CHỐT: Lấy Lần 2 -> Lần 1
+        labels_str = get_final_label(row)
+        
         img_src = os.path.join(IMAGES_DIR, row["Image_Path"])
         
         if os.path.exists(img_src) and labels_str:
-            primary_disease = labels_str.split(";")[0].strip()
+            # Xử lý Đa nhãn (Multi-label split by ;)
+            label_list = labels_str.split(";")
+            
+            # 1. Copy vào thư mục phân loại (Classified Folders)
+            for lbl_vn in label_list:
+                folder_name = LABEL_MAP.get(lbl_vn.strip())
+                if folder_name:
+                    dst_class = os.path.join(TRAIN_DATA_DIR, "classified", folder_name, row["Image_Path"])
+                    shutil.copy(img_src, dst_class)
+
+            # 2. Chuẩn bị cho Detection (YOLO Format)
+            # Lấy tên bệnh chính (cái đầu tiên) làm prefix
+            primary_disease = label_list[0].strip()
             folder_prefix = LABEL_MAP.get(primary_disease, "Unknown")
             new_filename = f"{folder_prefix}_{row['Image_Path']}"
+            
             dst_img = os.path.join(TRAIN_DATA_DIR, "images", new_filename)
             shutil.copy(img_src, dst_img)
             
+            # Auto-Label Anatomy
             if use_anatomy_auto_label and anatomy_model:
                 try:
                     results = anatomy_model(img_src, verbose=False)[0]
@@ -215,6 +255,7 @@ def export_selected_data(df_selected, use_anatomy_auto_label=True):
                         cls_id = int(box.cls[0])
                         x, y, w, h = box.xywhn[0].tolist()
                         txt_content += f"{cls_id} {x:.6f} {y:.6f} {w:.6f} {h:.6f}\n"
+                    
                     dst_txt = os.path.join(TRAIN_DATA_DIR, "labels", new_filename.replace(".jpg", ".txt").replace(".png", ".txt"))
                     with open(dst_txt, "w") as f: f.write(txt_content)
                 except: pass
@@ -222,7 +263,7 @@ def export_selected_data(df_selected, use_anatomy_auto_label=True):
         progress_bar.progress((idx + 1) / total)
             
     shutil.make_archive(TRAIN_DATA_DIR, 'zip', TRAIN_DATA_DIR)
-    return f"Đã xuất {count} ảnh!", f"{TRAIN_DATA_DIR}.zip"
+    return f"Đã xuất {count} ảnh (Ưu tiên nhãn Lần 2)!", f"{TRAIN_DATA_DIR}.zip"
 
 def process_image(image_file):
     if "ANATOMY" not in MODELS: return None, "Thiếu Anatomy", False, 0, "", ""
@@ -338,19 +379,12 @@ elif mode == "📂 Hội Chẩn (Gán Nhãn)":
             col_img, col_act = st.columns([1, 1])
             with col_img:
                 img_path = os.path.join(IMAGES_DIR, record["Image_Path"])
-                # --- VISUALIZE ANATOMY (HIỆN KHUNG GIẢI PHẪU) ---
-                if os.path.exists(img_path):
-                    st.write("🖼️ **Ảnh gốc & Vị trí giải phẫu (AI):**")
-                    vis_img, parts = visualize_anatomy(img_path)
-                    st.image(vis_img, caption=f"Cấu trúc tìm thấy: {', '.join(parts)}", use_container_width=True)
-                else: st.error("Không tìm thấy ảnh gốc.")
-            
+                if os.path.exists(img_path): st.image(img_path, caption=f"Hồ sơ: {selected_id}", use_container_width=True)
             with col_act:
                 st.info(f"**BN:** {record['Patient_Info']} | **AI:** {record['Result']}")
                 st.markdown("---")
                 options = ["Chưa đánh giá", "✅ Đồng thuận (Đúng)", "❌ Sai (Dương tính giả)", "❌ Sai (Âm tính giả)"]
                 
-                # --- LOGIC HỘI CHẨN ---
                 fb1 = record.get("Feedback_1", "Chưa đánh giá")
                 fb2 = record.get("Feedback_2", "Chưa đánh giá")
                 
@@ -381,9 +415,20 @@ elif mode == "🛠️ Tạo Dataset Train":
             st.success("✅ Đã mở khóa Developer Mode!")
             if os.path.exists(LOG_FILE):
                 df = pd.read_csv(LOG_FILE)
+                # TÍNH TOÁN CỘT "NHÃN CUỐI CÙNG" ĐỂ HIỂN THỊ
+                df["Final_Label"] = df.apply(get_final_label, axis=1)
+                
                 df["Select"] = False
                 st.write("### 📋 Chọn ca để xuất dữ liệu:")
-                df_editor = st.data_editor(df[["Select", "ID", "Patient_Info", "Label_1", "Label_2"]], column_config={"Select": st.column_config.CheckboxColumn("Chọn", default=False)}, hide_index=True, use_container_width=True)
+                
+                # Highlight dòng mâu thuẫn (Lần 1 != Lần 2)
+                st.info("💡 Lưu ý: Cột 'Final_Label' sẽ ưu tiên lấy đánh giá Lần 2 (nếu có).")
+                
+                df_editor = st.data_editor(
+                    df[["Select", "ID", "Patient_Info", "Label_1", "Label_2", "Final_Label"]],
+                    column_config={"Select": st.column_config.CheckboxColumn("Chọn", default=False)},
+                    hide_index=True, use_container_width=True
+                )
                 selected_rows = df_editor[df_editor["Select"] == True]
                 df_final = df.iloc[selected_rows.index]
                 st.write(f"Đang chọn: **{len(df_final)}** ca.")
