@@ -16,7 +16,7 @@ import google.generativeai as genai
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="Hệ thống Chẩn đoán X-quang (V23.0)",
+    page_title="AI Hospital (V23.1 - Debug Mode)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -52,7 +52,6 @@ REQUIRED_COLUMNS = ["ID", "Time", "Result", "Details", "Image_Path", "Patient_In
 if not os.path.exists(LOG_FILE):
     pd.DataFrame(columns=REQUIRED_COLUMNS).to_csv(LOG_FILE, index=False)
 else:
-    # Vá lỗi thiếu cột tự động
     try:
         df_check = pd.read_csv(LOG_FILE)
         changed = False
@@ -78,7 +77,7 @@ DOCTOR_ROSTER = {
     "EFFUSION": "Dr_Effusion.pt", "OPACITY": "Dr_Opacity.pt", "HEART": "Dr_Heart.pt"         
 }
 
-# ================= 3. CORE FUNCTIONS (YOLO & UTILS) =================
+# ================= 3. CORE FUNCTIONS =================
 @st.cache_resource
 def load_models():
     device = 0 if torch.cuda.is_available() else 'cpu'
@@ -101,7 +100,9 @@ def ask_gemini_for_label(api_key, image_path, clinical_info=""):
         prompt = f"Bạn là BS chẩn đoán hình ảnh. Lâm sàng: {clinical_info}. Xem ảnh X-quang và chẩn đoán theo danh sách: [{labels_str}]. Output JSON: {{'labels': [], 'reasoning': ''}}"
         response = model.generate_content([prompt, img], generation_config={"response_mime_type": "application/json"})
         return json.loads(response.text)
-    except Exception as e: return {"labels": [], "reasoning": f"Lỗi: {str(e)}"}
+    except Exception as e: 
+        # TRẢ VỀ LỖI CỤ THỂ ĐỂ HIỂN THỊ
+        return {"labels": [], "reasoning": f"Lỗi kết nối Gemini: {str(e)}"}
 
 def read_dicom_image(file_buffer):
     try:
@@ -318,10 +319,10 @@ def generate_html_report(findings_db, has_danger, patient_info, img_id):
     if findings_db["Heart"]: heart_html = f'<ul style="margin-top:0px; padding-left:20px; color:#e65100;"><li><b>Tim mạch:</b> {"; ".join(findings_db["Heart"])}</li></ul>'
     bone_html = """<ul style="margin-top:0px; padding-left:20px;"><li>Khung xương lồng ngực cân đối...</li></ul>"""
     if has_danger or (len(findings_db["Lung"]) + len(findings_db["Pleura"]) > 0):
-        conclusion_html = """<div style='color:#c62828; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC</div>"""
+        conclusion_html = """<div style='color:#c62828; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC</div><div style="background:#fff3e0; padding:15px; border-left:5px solid #ff9800; font-size:15px;"><strong>💡 Khuyến nghị:</strong><br>– Đề nghị kết hợp lâm sàng và xét nghiệm cận lâm sàng.<br>– Cân nhắc chụp CT ngực để đánh giá chi tiết bản chất tổn thương.</div>"""
     else:
-        conclusion_html = """<div style='color:#2e7d32; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>✅ CHƯA GHI NHẬN BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC TẠI THỜI ĐIỂM KHẢO SÁT</div>"""
-    html = f"""<div class="report-container"><div class="hospital-header"><h2>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h2><p>(Hệ thống AI hỗ trợ phân tích X-quang ngực)</p></div><div style="margin-bottom: 20px; font-size: 15px;"><table class="info-table"><tr><td style="width:60%;"><strong>Bệnh nhân:</strong> {patient_info}</td><td style="text-align:right;"><strong>Thời gian:</strong> {current_time}</td></tr><tr><td><strong>Mã hồ sơ:</strong> {img_id}</td><td></td></tr></table><div class="tech-box"><strong>⚙️ KỸ THUẬT:</strong><br>X-quang ngực thẳng (PA view), tư thế đúng, hít sâu tối đa.</div></div><div class="section-header">I. MÔ TẢ HÌNH ẢNH</div><p style="margin-bottom:5px;"><strong>1. Nhu mô phổi</strong></p>{lung_html}<p style="margin-bottom:5px;"><strong>2. Màng phổi</strong></p>{pleura_html}<p style="margin-bottom:5px;"><strong>3. Tim – Trung thất</strong></p>{heart_html}<p style="margin-bottom:5px;"><strong>4. Xương lồng ngực & phần mềm thành ngực</strong></p>{bone_html}<div class="section-header" style="margin-top:25px;">II. KẾT LUẬN & KHUYẾN NGHỊ</div><div style="padding:15px; border:1px dashed #ccc; margin-bottom:15px;">{conclusion_html}</div><div style="margin-top: 50px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 13px; color: #666; text-align: center; font-style: italic;">__________________________________________________<br>Kết quả này do trí tuệ nhân tạo (AI) hỗ trợ thiết lập.<br>Chẩn đoán xác định thuộc về Bác sĩ chuyên khoa Chẩn đoán hình ảnh.</div></div>"""
+        conclusion_html = """<div style='color:#2e7d32; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>✅ CHƯA GHI NHẬN BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC TẠI THỜI ĐIỂM KHẢO SÁT</div><div style="color:#555; font-style:italic;"><strong>💡 Khuyến nghị:</strong><br>– Theo dõi lâm sàng.<br>– Nếu có triệu chứng hô hấp hoặc đau ngực kéo dài, cân nhắc chụp lại phim hoặc phương tiện chẩn đoán hình ảnh khác (CT ngực).</div>"""
+    html = f"""<div class="report-container"><div class="hospital-header"><h2>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h2><p>(Hệ thống AI hỗ trợ phân tích X-quang ngực)</p></div><div style="margin-bottom: 20px; font-size: 15px;"><table class="info-table"><tr><td style="width:60%;"><strong>Bệnh nhân:</strong> {patient_info}</td><td style="text-align:right;"><strong>Thời gian:</strong> {current_time}</td></tr><tr><td><strong>Mã hồ sơ:</strong> {img_id}</td><td></td></tr></table><div class="tech-box"><strong>⚙️ KỸ THUẬT:</strong><br>X-quang ngực thẳng (PA view), tư thế đúng, hít sâu tối đa.<br>Độ xuyên thấu và độ tương phản đạt yêu cầu đánh giá nhu mô phổi, trung thất và xương lồng ngực.</div></div><div class="section-header">I. MÔ TẢ HÌNH ẢNH</div><p style="margin-bottom:5px;"><strong>1. Nhu mô phổi</strong></p>{lung_html}<p style="margin-bottom:5px;"><strong>2. Màng phổi</strong></p>{pleura_html}<p style="margin-bottom:5px;"><strong>3. Tim – Trung thất</strong></p>{heart_html}<p style="margin-bottom:5px;"><strong>4. Xương lồng ngực & phần mềm thành ngực</strong></p>{bone_html}<div class="section-header" style="margin-top:25px;">II. KẾT LUẬN & KHUYẾN NGHỊ</div><div style="padding:15px; border:1px dashed #ccc; margin-bottom:15px;">{conclusion_html}</div><div style="margin-top: 50px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 13px; color: #666; text-align: center; font-style: italic;">__________________________________________________<br>Kết quả này do trí tuệ nhân tạo (AI) hỗ trợ thiết lập.<br>Chẩn đoán xác định thuộc về Bác sĩ chuyên khoa Chẩn đoán hình ảnh.</div></div>"""
     return html
 
 # ================= 7. GIAO DIỆN CHÍNH =================
@@ -339,7 +340,7 @@ with st.sidebar:
         for s in MODEL_STATUS: st.caption(s)
 
 if mode == "🔍 Phân Tích & Upload":
-    st.title("🏥 TRỢ LÝ CHẨN ĐOÁN HÌNH ẢNH (AI)")
+    st.title("🏥 TRỢ LÝ CHẨN ĐOÁN HÌNHẢNH (AI)")
     col1, col2 = st.columns([1, 1.5])
     with col1:
         uploaded_file = st.file_uploader("Tải ảnh", type=["jpg", "png", "jpeg", "dcm", "dicom"])
@@ -387,8 +388,14 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                             res = ask_gemini_for_label(api_key, img_path, clinical_input)
                             gemini_labels = res.get("labels", [])
                             gemini_reason = res.get("reasoning", "")
+                            
+                            # --- HIỂN THỊ KẾT QUẢ RÕ RÀNG ---
                             if gemini_labels:
                                 st.markdown(f'<div class="gemini-box"><b>🤖 Gemini Gợi ý:</b> {", ".join(gemini_labels)}<br><i>"{gemini_reason}"</i></div>', unsafe_allow_html=True)
+                            else:
+                                # NẾU LỖI, HIỆN LỖI RA LUÔN
+                                err_msg = gemini_reason if gemini_reason else "Lỗi không xác định."
+                                st.error(f"⚠️ Gemini không trả lời được: {err_msg}")
                 else: st.info("💡 Nhập Gemini API Key để dùng tính năng gợi ý.")
 
                 fb1 = str(record.get("Feedback_1", ""))
@@ -400,7 +407,6 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                 
                 if fb1 == "Chưa đánh giá" or fb1 == "":
                     st.markdown('**🔹 ĐÁNH GIÁ LẦN 1**')
-                    # LOGIC AN TOÀN CHỐNG CRASH KHI SPLIT
                     default_labels = gemini_labels if gemini_labels else ([l for l in lb1.split("; ") if l])
                     valid_defaults = [l for l in default_labels if l in ALLOWED_LABELS]
                     
