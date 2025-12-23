@@ -17,7 +17,7 @@ from openai import OpenAI
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital (V21.3 - Stable Fixed)",
+    page_title="AI Hospital (V21.4 - Feedback Fixed)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -32,7 +32,7 @@ st.markdown("""
     .section-header { background-color: #eee; padding: 8px; border-left: 5px solid #002f6c; margin: 20px 0 15px 0; font-weight: bold; color: #002f6c; text-transform: uppercase; }
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 45px; }
     .gpt-suggestion { background-color: #e8f5e9; padding: 15px; border-radius: 5px; border-left: 5px solid #4caf50; margin-bottom: 10px; }
-    .tech-box { margin-top: 15px; padding: 12px; background: #f1f8e9; border: 1px solid #c5e1a5; border-radius: 4px; }
+    .feedback-box { background-color: #fff3e0; padding: 15px; border-radius: 5px; border: 1px solid #ffb74d; margin-top: 10px; }
     .info-table td { padding: 4px 2px; vertical-align: top; }
 </style>
 """, unsafe_allow_html=True)
@@ -170,9 +170,7 @@ def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
 def update_feedback_slot(selected_id, feedback_value, label_value, slot, gpt_reason=""):
     try:
         df = pd.read_csv(LOG_FILE)
-        # SỬA LỖI QUAN TRỌNG: Lấp đầy các ô trống bằng chuỗi rỗng để tránh lỗi NaN
-        df = df.fillna("")
-        
+        df = df.fillna("") # Fix lỗi NaN
         df['ID'] = df['ID'].astype(str)
         selected_id = str(selected_id)
         if slot == 1:
@@ -187,7 +185,7 @@ def update_feedback_slot(selected_id, feedback_value, label_value, slot, gpt_rea
     except: return False
 
 def get_final_label(row):
-    # Ép kiểu string để tránh lỗi
+    # Ép kiểu string an toàn để tránh lỗi split
     lbl2 = str(row["Label_2"]) if pd.notna(row["Label_2"]) else ""
     fb2 = str(row["Feedback_2"]) if pd.notna(row["Feedback_2"]) else ""
     lbl1 = str(row["Label_1"]) if pd.notna(row["Label_1"]) else ""
@@ -326,16 +324,17 @@ def generate_html_report(findings_db, has_danger, patient_info, img_id):
     if findings_db["Heart"]: heart_html = f'<ul style="margin-top:0px; padding-left:20px; color:#e65100;"><li><b>Tim mạch:</b> {"; ".join(findings_db["Heart"])}</li></ul>'
     bone_html = """<ul style="margin-top:0px; padding-left:20px;"><li>Khung xương lồng ngực cân đối...</li></ul>"""
     if has_danger or (len(findings_db["Lung"]) + len(findings_db["Pleura"]) > 0):
-        conclusion_html = """<div style='color:#c62828; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC</div><div style="background:#fff3e0; padding:15px; border-left:5px solid #ff9800; font-size:15px;"><strong>💡 Khuyến nghị:</strong><br>– Đề nghị kết hợp lâm sàng và xét nghiệm cận lâm sàng.<br>– Cân nhắc chụp CT ngực để đánh giá chi tiết bản chất tổn thương.</div>"""
+        conclusion_html = """<div style='color:#c62828; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG...</div>"""
     else:
-        conclusion_html = """<div style='color:#2e7d32; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>✅ CHƯA GHI NHẬN BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC TẠI THỜI ĐIỂM KHẢO SÁT</div><div style="color:#555; font-style:italic;"><strong>💡 Khuyến nghị:</strong><br>– Theo dõi lâm sàng.<br>– Nếu có triệu chứng hô hấp hoặc đau ngực kéo dài, cân nhắc chụp lại phim hoặc phương tiện chẩn đoán hình ảnh khác (CT ngực).</div>"""
-    html = f"""<div class="report-container"><div class="hospital-header"><h2>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h2><p>(Hệ thống AI hỗ trợ phân tích X-quang ngực)</p></div><div style="margin-bottom: 20px; font-size: 15px;"><table class="info-table"><tr><td style="width:60%;"><strong>Bệnh nhân:</strong> {patient_info}</td><td style="text-align:right;"><strong>Thời gian:</strong> {current_time}</td></tr><tr><td><strong>Mã hồ sơ:</strong> {img_id}</td><td></td></tr></table><div class="tech-box"><strong>⚙️ KỸ THUẬT:</strong><br>X-quang ngực thẳng (PA view), tư thế đúng, hít sâu tối đa.</div></div><div class="section-header">I. MÔ TẢ HÌNH ẢNH</div><p style="margin-bottom:5px;"><strong>1. Nhu mô phổi</strong></p>{lung_html}<p style="margin-bottom:5px;"><strong>2. Màng phổi</strong></p>{pleura_html}<p style="margin-bottom:5px;"><strong>3. Tim – Trung thất</strong></p>{heart_html}<p style="margin-bottom:5px;"><strong>4. Xương lồng ngực & phần mềm thành ngực</strong></p>{bone_html}<div class="section-header" style="margin-top:25px;">II. KẾT LUẬN & KHUYẾN NGHỊ</div><div style="padding:15px; border:1px dashed #ccc; margin-bottom:15px;">{conclusion_html}</div><div style="margin-top: 50px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 13px; color: #666; text-align: center; font-style: italic;">__________________________________________________<br>Kết quả này do trí tuệ nhân tạo (AI) hỗ trợ thiết lập.<br>Chẩn đoán xác định thuộc về Bác sĩ chuyên khoa Chẩn đoán hình ảnh.</div></div>"""
+        conclusion_html = """<div style='color:#2e7d32; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>✅ CHƯA GHI NHẬN BẤT THƯỜNG...</div>"""
+    html = f"""<div class="report-container"><div class="hospital-header"><h2>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h2><p>(Hệ thống AI hỗ trợ phân tích X-quang ngực)</p></div><div style="margin-bottom: 20px; font-size: 15px;"><table class="info-table"><tr><td style="width:60%;"><strong>Bệnh nhân:</strong> {patient_info}</td><td style="text-align:right;"><strong>Thời gian:</strong> {current_time}</td></tr><tr><td><strong>Mã hồ sơ:</strong> {img_id}</td><td></td></tr></table><div class="tech-box"><strong>⚙️ KỸ THUẬT:</strong><br>X-quang ngực thẳng (PA view), tư thế đúng, hít sâu tối đa.</div></div><div class="section-header">I. MÔ TẢ HÌNH ẢNH</div><p style="margin-bottom:5px;"><strong>1. Nhu mô phổi</strong></p>{lung_html}<p style="margin-bottom:5px;"><strong>2. Màng phổi</strong></p>{pleura_html}<p style="margin-bottom:5px;"><strong>3. Tim – Trung thất</strong></p>{heart_html}<p style="margin-bottom:5px;"><strong>4. Xương</strong></p>{bone_html}<div class="section-header" style="margin-top:25px;">II. KẾT LUẬN</div><div style="padding:15px; border:1px dashed #ccc; margin-bottom:15px;">{conclusion_html}</div></div>"""
     return html
 
 # ================= 7. GIAO DIỆN CHÍNH =================
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3063/3063176.png", width=60)
     st.title("ĐIỀU KHIỂN")
+    
     api_key = st.text_input("🔑 OpenAI API Key:", type="password", help="Nhập Key để dùng tính năng AI Teacher")
     mode = st.radio("Chức năng:", ["🔍 Phân Tích Ca Bệnh", "📂 Hội Chẩn (AI Teacher)", "🛠️ Xuất Dataset"])
     st.divider()
@@ -365,7 +364,7 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
     st.title("📂 HỘI CHẨN & AI GÁN NHÃN")
     if os.path.exists(LOG_FILE):
         df = pd.read_csv(LOG_FILE)
-        # SỬA LỖI NAN (FIX CRASH)
+        # SỬA LỖI NAN: Đảm bảo không có ô trống gây crash
         df = df.fillna("")
         
         df['ID'] = df['ID'].astype(str)
@@ -397,21 +396,46 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                             else: st.error("ChatGPT không trả về nhãn.")
                 else: st.warning("⚠️ Nhập API Key bên trái để dùng ChatGPT.")
 
-                # SỬA LỖI XỬ LÝ CHUỖI LABEL (Ép kiểu string an toàn)
+                # MANUAL LABELING SECTION - KHÔI PHỤC ĐẦY ĐỦ CÁC OPTION
                 fb1 = str(record.get("Feedback_1", ""))
                 lb1 = str(record.get("Label_1", ""))
                 
-                # Logic: Ưu tiên GPT, nếu không có thì lấy Label cũ, nếu không thì rỗng
-                default_labels = gpt_labels if gpt_labels else ([l for l in lb1.split("; ") if l])
+                # Logic lấy label gợi ý
+                if gpt_labels:
+                    default_labels = gpt_labels
+                elif lb1:
+                    default_labels = lb1.split("; ")
+                else:
+                    default_labels = []
+                
                 valid_defaults = [l for l in default_labels if l in ALLOWED_LABELS]
                 
-                st.write("### 📝 Kết luận chuyên môn:")
-                new_fb = st.radio("Đánh giá:", ["Chưa đánh giá", "✅ Đồng thuận", "❌ Sai (Sửa lại)"], index=0 if fb1 == "Chưa đánh giá" else (1 if "Đồng thuận" in fb1 else 2))
+                # Khôi phục các tùy chọn đánh giá chi tiết
+                st.write("### 📝 Kết luận chuyên môn (Ground Truth):")
+                
+                feedback_options = [
+                    "Chưa đánh giá", 
+                    "✅ Đồng thuận (Đúng)", 
+                    "⚠️ Dương tính giả (AI báo bệnh - Thực tế không)", 
+                    "⚠️ Âm tính giả (AI bỏ sót - Thực tế có bệnh)"
+                ]
+                
+                # Xác định index mặc định cho Radio Button
+                idx = 0
+                if "Đồng thuận" in fb1: idx = 1
+                elif "Dương tính giả" in fb1: idx = 2
+                elif "Âm tính giả" in fb1: idx = 3
+                
+                new_fb = st.radio("Đánh giá kết quả của AI (YOLO):", feedback_options, index=idx)
+                
+                st.markdown('<div class="feedback-box"><b>📌 CHỌN NHÃN ĐÚNG (Để train lại):</b><br>Hãy chọn chính xác các bệnh lý mà bệnh nhân đang mắc phải.</div>', unsafe_allow_html=True)
+                
                 final_labels = st.multiselect("Bệnh lý xác định:", ALLOWED_LABELS, default=valid_defaults)
                 
                 if st.button("💾 LƯU KẾT QUẢ (TRAINING DATA)"):
-                    update_feedback_slot(selected_id, new_fb, "; ".join(final_labels), 1, gpt_reason)
-                    st.success("Đã lưu!"); time.sleep(0.5); st.rerun()
+                    lbl_str = "; ".join(final_labels)
+                    update_feedback_slot(selected_id, new_fb, lbl_str, 1, gpt_reason)
+                    st.success("Đã lưu vào cơ sở dữ liệu huấn luyện!"); time.sleep(0.5); st.rerun()
 
 elif mode == "🛠️ Xuất Dataset":
     st.title("🛠️ XUẤT DATASET")
