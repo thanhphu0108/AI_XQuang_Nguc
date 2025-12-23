@@ -1,6 +1,9 @@
 streamlit
-ultralytics
-opencv-python-headless
 numpy
-torch
+pandas
 pillow
+torch
+# Cài bản headless trước để tránh xung đột
+opencv-python-headless
+# Cài ultralytics nhưng bỏ qua dependencies (để nó không tự cài đè bản opencv thường)
+ultralytics
