@@ -6,4 +6,4 @@ torch
 opencv-python-headless
 ultralytics
 pydicom
-google-generativeai  <-- THÊM DÒNG NÀY
+google-generativeai
