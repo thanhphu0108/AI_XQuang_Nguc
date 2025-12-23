@@ -15,53 +15,20 @@ import random
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital (Dataset Master)",
+    page_title="AI Hospital (V18.0 - Full Visual)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# CSS GIAO DIỆN CHUẨN (HOSPITAL STYLE)
+# CSS GIAO DIỆN
 st.markdown("""
 <style>
     .main { background-color: #f4f6f9; }
-    
-    /* Khung báo cáo */
-    .report-container { 
-        background-color: white; 
-        padding: 40px; 
-        border-radius: 5px; 
-        box-shadow: 0 4px 10px rgba(0,0,0,0.1); 
-        font-family: 'Times New Roman', serif; 
-        color: #000; 
-        font-size: 16px; 
-        line-height: 1.5;
-    }
-    
-    /* Header Bệnh Viện */
-    .hospital-header { 
-        text-align: center; 
-        border-bottom: 2px solid #002f6c; 
-        padding-bottom: 10px; 
-        margin-bottom: 20px; 
-    }
-    .hospital-header h2 { margin: 0; color: #002f6c; text-transform: uppercase; font-size: 24px; }
-    
-    /* Tiêu đề mục */
-    .section-header { 
-        background-color: #eee; 
-        padding: 8px; 
-        border-left: 5px solid #002f6c; 
-        margin: 20px 0 15px 0; 
-        font-weight: bold; 
-        color: #002f6c; 
-        text-transform: uppercase; 
-    }
-    
-    /* Button Style */
+    .report-container { background-color: white; padding: 40px; border-radius: 5px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); font-family: 'Times New Roman', serif; color: #000; font-size: 16px; }
+    .hospital-header { text-align: center; border-bottom: 2px solid #002f6c; padding-bottom: 10px; margin-bottom: 20px; }
+    .section-header { background-color: #eee; padding: 8px; border-left: 5px solid #002f6c; margin: 20px 0 15px 0; font-weight: bold; color: #002f6c; text-transform: uppercase; }
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 45px; }
-    
-    /* Table Padding */
     .info-table td { padding: 4px 2px; vertical-align: top; }
 </style>
 """, unsafe_allow_html=True)
@@ -76,7 +43,7 @@ TRAIN_DATA_DIR = os.path.join(BASE_PATH, "dataset_yolo_ready")
 
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
-# DANH SÁCH BỆNH LÝ (Người dùng chọn để phân loại folder)
+# DANH SÁCH BỆNH LÝ (ĐỂ TRAIN MODEL BỆNH)
 LABEL_MAP = {
     "Bình thường (Normal)": "Normal",
     "Bóng tim to (Cardiomegaly)": "Cardiomegaly",
@@ -90,12 +57,10 @@ LABEL_MAP = {
     "Khác / Tạp âm (Other)": "Other"
 }
 
-# Khởi tạo file CSV
 if not os.path.exists(LOG_FILE):
     pd.DataFrame(columns=["ID", "Time", "Result", "Image_Path", "Patient_Info", 
                           "Feedback_1", "Label_1", "Feedback_2", "Label_2"]).to_csv(LOG_FILE, index=False)
 
-# Danh sách Model AI
 DOCTOR_ROSTER = {
     "ANATOMY": "Dr_Anatomy.pt",      
     "PNEUMOTHORAX": "Dr_Pneumothorax.pt", 
@@ -106,7 +71,7 @@ DOCTOR_ROSTER = {
     "HEART": "Dr_Heart.pt"         
 }
 
-# ================= 3. CORE FUNCTIONS (AI & DATA) =================
+# ================= 3. CORE FUNCTIONS =================
 @st.cache_resource
 def load_models():
     device = 0 if torch.cuda.is_available() else 'cpu'
@@ -156,7 +121,6 @@ def get_finding_text(disease, conf, location):
     return None, None
 
 def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
-    # ID: DDMMYYYYHHMMSS
     img_id = datetime.now().strftime("%d%m%Y%H%M%S") 
     file_name = f"XRAY_{img_id}.jpg"
     save_path = os.path.join(IMAGES_DIR, file_name)
@@ -195,43 +159,28 @@ def update_feedback_slot(selected_id, feedback_value, label_value, slot):
         return True
     except: return False
 
-# --- HÀM PREVIEW (VALID KỸ) ---
-def preview_auto_label(df_selected):
-    if df_selected.empty: return None, "Chưa chọn dòng nào!"
-    
-    # Lấy ngẫu nhiên 1 dòng
-    random_row = df_selected.sample(1).iloc[0]
-    img_path = os.path.join(IMAGES_DIR, random_row["Image_Path"])
-    
-    if not os.path.exists(img_path): return None, "Không tìm thấy file ảnh gốc!"
-    
+# --- HÀM VẼ GIẢI PHẪU LÊN ẢNH (VISUALIZE ANATOMY) ---
+def visualize_anatomy(img_path):
+    if not os.path.exists(img_path): return None, "Không tìm thấy ảnh"
     img = cv2.imread(img_path)
     anatomy_model = MODELS.get("ANATOMY")
     
-    if not anatomy_model: return None, "Chưa load model Anatomy!"
-    
-    # Chạy AI gán nhãn
-    results = anatomy_model(img, verbose=False)[0]
-    detected_classes = [] 
-    
-    # Vẽ khung lên ảnh
-    for box in results.boxes:
-        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-        cls_id = int(box.cls[0])
-        label_name = anatomy_model.names[cls_id]
-        detected_classes.append(label_name)
-        
-        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(img, f"{label_name}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-    msg = f"""
-    🖼️ **File:** {random_row['Image_Path']}
-    🏥 **Bệnh lý (BS chọn):** {random_row.get('Label_1') or random_row.get('Label_2')}
-    🤖 **AI Giải phẫu (Auto-Label):** {', '.join(set(detected_classes))}
-    """
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB), msg
+    detected_parts = []
+    if anatomy_model:
+        results = anatomy_model(img, verbose=False)[0]
+        for box in results.boxes:
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+            cls_id = int(box.cls[0])
+            label_name = anatomy_model.names[cls_id]
+            detected_parts.append(label_name)
+            
+            # Vẽ khung màu xanh lá
+            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(img, label_name, (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB), list(set(detected_parts))
 
-# --- HÀM XUẤT DATASET (CÓ FILE TXT) ---
+# --- HÀM XUẤT DATASET ---
 def export_selected_data(df_selected, use_anatomy_auto_label=True):
     count = 0
     if os.path.exists(TRAIN_DATA_DIR): shutil.rmtree(TRAIN_DATA_DIR)
@@ -240,12 +189,9 @@ def export_selected_data(df_selected, use_anatomy_auto_label=True):
     os.makedirs(os.path.join(TRAIN_DATA_DIR, "labels"), exist_ok=True)
     
     anatomy_model = MODELS.get("ANATOMY")
-    
-    # Tạo file classes.txt
     if anatomy_model:
         with open(os.path.join(TRAIN_DATA_DIR, "classes.txt"), "w") as f:
-            for idx, name in anatomy_model.names.items():
-                f.write(f"{name}\n")
+            for idx, name in anatomy_model.names.items(): f.write(f"{name}\n")
     
     progress_bar = st.progress(0)
     total = len(df_selected)
@@ -269,7 +215,6 @@ def export_selected_data(df_selected, use_anatomy_auto_label=True):
                         cls_id = int(box.cls[0])
                         x, y, w, h = box.xywhn[0].tolist()
                         txt_content += f"{cls_id} {x:.6f} {y:.6f} {w:.6f} {h:.6f}\n"
-                    
                     dst_txt = os.path.join(TRAIN_DATA_DIR, "labels", new_filename.replace(".jpg", ".txt").replace(".png", ".txt"))
                     with open(dst_txt, "w") as f: f.write(txt_content)
                 except: pass
@@ -277,7 +222,7 @@ def export_selected_data(df_selected, use_anatomy_auto_label=True):
         progress_bar.progress((idx + 1) / total)
             
     shutil.make_archive(TRAIN_DATA_DIR, 'zip', TRAIN_DATA_DIR)
-    return f"Đã xuất {count} ảnh kèm nhãn giải phẫu!", f"{TRAIN_DATA_DIR}.zip"
+    return f"Đã xuất {count} ảnh!", f"{TRAIN_DATA_DIR}.zip"
 
 def process_image(image_file):
     if "ANATOMY" not in MODELS: return None, "Thiếu Anatomy", False, 0, "", ""
@@ -390,18 +335,25 @@ elif mode == "📂 Hội Chẩn (Gán Nhãn)":
         selected_id = st.selectbox("👉 Chọn Mã hồ sơ (ID) để hội chẩn:", id_list)
         if selected_id:
             record = df[df["ID"] == selected_id].iloc[0]
-            fb1 = record.get("Feedback_1", "Chưa đánh giá")
-            fb2 = record.get("Feedback_2", "Chưa đánh giá")
             col_img, col_act = st.columns([1, 1])
             with col_img:
                 img_path = os.path.join(IMAGES_DIR, record["Image_Path"])
-                if os.path.exists(img_path): st.image(img_path, caption=f"Hồ sơ: {selected_id}", use_container_width=True)
+                # --- VISUALIZE ANATOMY (HIỆN KHUNG GIẢI PHẪU) ---
+                if os.path.exists(img_path):
+                    st.write("🖼️ **Ảnh gốc & Vị trí giải phẫu (AI):**")
+                    vis_img, parts = visualize_anatomy(img_path)
+                    st.image(vis_img, caption=f"Cấu trúc tìm thấy: {', '.join(parts)}", use_container_width=True)
+                else: st.error("Không tìm thấy ảnh gốc.")
+            
             with col_act:
                 st.info(f"**BN:** {record['Patient_Info']} | **AI:** {record['Result']}")
                 st.markdown("---")
                 options = ["Chưa đánh giá", "✅ Đồng thuận (Đúng)", "❌ Sai (Dương tính giả)", "❌ Sai (Âm tính giả)"]
                 
-                # --- LẦN 1 ---
+                # --- LOGIC HỘI CHẨN ---
+                fb1 = record.get("Feedback_1", "Chưa đánh giá")
+                fb2 = record.get("Feedback_2", "Chưa đánh giá")
+                
                 if pd.isna(fb1) or fb1 == "Chưa đánh giá":
                     st.write("🔹 **Lần 1:** Chưa có đánh giá.")
                     new_val = st.radio("Ý kiến Lần 1:", options, index=0, key="fb1")
@@ -409,7 +361,6 @@ elif mode == "📂 Hội Chẩn (Gán Nhãn)":
                     if st.button("Lưu Đánh Giá Lần 1"):
                         if update_feedback_slot(selected_id, new_val, "; ".join(label_select), 1):
                             st.success("Đã lưu!"); time.sleep(0.5); st.rerun()
-                # --- LẦN 2 ---
                 elif pd.isna(fb2) or fb2 == "Chưa đánh giá":
                     st.success(f"✅ Lần 1: {fb1}")
                     st.write("🔹 **Lần 2:** Chưa có đánh giá.")
@@ -424,22 +375,15 @@ elif mode == "📂 Hội Chẩn (Gán Nhãn)":
 
 elif mode == "🛠️ Tạo Dataset Train":
     st.title("🛠️ DATASET MASTER (AUTO-LABEL)")
-    
     admin_pass = st.text_input("🔒 Nhập mật khẩu quản trị:", type="password")
     if admin_pass:
-        # Check MD5 hash của "Admin@123456p"
         if hashlib.md5(admin_pass.encode()).hexdigest() == hashlib.md5("Admin@123456p".encode()).hexdigest():
             st.success("✅ Đã mở khóa Developer Mode!")
-            
             if os.path.exists(LOG_FILE):
                 df = pd.read_csv(LOG_FILE)
                 df["Select"] = False
                 st.write("### 📋 Chọn ca để xuất dữ liệu:")
-                df_editor = st.data_editor(
-                    df[["Select", "ID", "Patient_Info", "Label_1", "Label_2"]],
-                    column_config={"Select": st.column_config.CheckboxColumn("Chọn", default=False)},
-                    hide_index=True, use_container_width=True
-                )
+                df_editor = st.data_editor(df[["Select", "ID", "Patient_Info", "Label_1", "Label_2"]], column_config={"Select": st.column_config.CheckboxColumn("Chọn", default=False)}, hide_index=True, use_container_width=True)
                 selected_rows = df_editor[df_editor["Select"] == True]
                 df_final = df.iloc[selected_rows.index]
                 st.write(f"Đang chọn: **{len(df_final)}** ca.")
@@ -447,18 +391,17 @@ elif mode == "🛠️ Tạo Dataset Train":
                 c1, c2, c3 = st.columns(3)
                 auto_label = c1.checkbox("🤖 Auto-Label Anatomy", value=True)
                 
-                if c2.button("👁️ Xem thử 1 ca ngẫu nhiên"):
+                if c2.button("👁️ Xem thử"):
                     prev_img, prev_msg = preview_auto_label(df_final)
                     if prev_img is not None: st.image(prev_img, caption=prev_msg, width=500)
                     else: st.warning(prev_msg)
                 
-                if c3.button("🚀 XUẤT DATASET NGAY", type="primary"):
+                if c3.button("🚀 XUẤT DATASET"):
                     if not df_final.empty:
                         with st.spinner("Đang xử lý..."):
                             msg, zip_path = export_selected_data(df_final, use_anatomy_auto_label=auto_label)
                             st.success(msg)
-                            with open(zip_path, "rb") as fp:
-                                st.download_button("📥 Tải Dataset (.zip)", fp, file_name="yolo_dataset_master.zip")
+                            with open(zip_path, "rb") as fp: st.download_button("📥 Tải Dataset (.zip)", fp, file_name="yolo_dataset_master.zip")
                     else: st.warning("Vui lòng chọn ít nhất 1 ca!")
             else: st.info("Chưa có dữ liệu.")
         else: st.error("⛔ Mật khẩu sai!")
