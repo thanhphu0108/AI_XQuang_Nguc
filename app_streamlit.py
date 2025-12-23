@@ -12,7 +12,7 @@ import pydicom
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="Hệ Thống hổ trợ Chẩn Đoán Hình Ảnh X-quang ngực thẳng",
+    page_title="AI Hospital (Dataset Generator)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -36,11 +36,6 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 45px; }
     .info-table { width: 100%; }
     .info-table td { padding: 4px 2px; vertical-align: top; }
-    
-    /* Highlight trạng thái hội chẩn */
-    .status-badge { padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; color: white; }
-    .status-wait { background-color: #ff9800; }
-    .status-done { background-color: #4caf50; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -53,27 +48,34 @@ LOG_FILE = os.path.join(HISTORY_DIR, "log_book.csv")
 
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
-# --- KHỞI TẠO HOẶC NÂNG CẤP FILE CSV ---
+# DANH SÁCH 10 BỆNH LÝ ĐỂ TẠO DATASET
+DIAGNOSIS_LIST = [
+    "1. Bình thường (Normal)",
+    "2. Bóng tim to (Cardiomegaly)",
+    "3. Viêm phổi (Pneumonia)",
+    "4. Tràn dịch màng phổi (Effusion)",
+    "5. Tràn khí màng phổi (Pneumothorax)",
+    "6. U phổi / Nốt mờ (Nodule/Mass)",
+    "7. Xơ hóa / Lao phổi (Fibrosis/TB)",
+    "8. Gãy xương (Fracture)",
+    "9. Dày dính màng phổi (Pleural Thickening)",
+    "10. Khác / Tạp âm (Other)"
+]
+
+# --- KHỞI TẠO FILE CSV ---
 if not os.path.exists(LOG_FILE):
-    # Tạo mới nếu chưa có
-    pd.DataFrame(columns=["ID", "Time", "Result", "Details", "Image_Path", "Patient_Info", "Feedback_1", "Feedback_2"]).to_csv(LOG_FILE, index=False)
+    pd.DataFrame(columns=["ID", "Time", "Result", "Details", "Image_Path", "Patient_Info", 
+                          "Feedback_1", "Label_1", "Feedback_2", "Label_2"]).to_csv(LOG_FILE, index=False)
 else:
-    # Nâng cấp file cũ nếu thiếu cột (Migration)
+    # Tự động thêm cột Label_1, Label_2 nếu là file cũ
     try:
         df = pd.read_csv(LOG_FILE)
         changed = False
-        if "Feedback" in df.columns: # Đổi tên cột cũ
-            df.rename(columns={"Feedback": "Feedback_1"}, inplace=True)
-            changed = True
-        if "Feedback_1" not in df.columns:
-            df["Feedback_1"] = "Chưa đánh giá"
-            changed = True
-        if "Feedback_2" not in df.columns:
-            df["Feedback_2"] = "Chưa đánh giá"
-            changed = True
-        
-        if changed:
-            df.to_csv(LOG_FILE, index=False)
+        for col in ["Feedback_1", "Label_1", "Feedback_2", "Label_2"]:
+            if col not in df.columns:
+                df[col] = "Chưa đánh giá" if "Feedback" in col else ""
+                changed = True
+        if changed: df.to_csv(LOG_FILE, index=False)
     except: pass
 
 DOCTOR_ROSTER = {
@@ -154,13 +156,12 @@ def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
     detail_list = findings_db["Lung"] + findings_db["Pleura"] + findings_db["Heart"]
     details = " | ".join(detail_list).replace("**", "") if detail_list else "Không ghi nhận bất thường"
     
-    # Tạo record với 2 slot Feedback trống
     new_record = {
         "ID": img_id, "Time": datetime.now().strftime("%H:%M %d/%m/%Y"), 
         "Result": result, "Details": details, "Image_Path": file_name, 
         "Patient_Info": patient_info, 
-        "Feedback_1": "Chưa đánh giá", # Slot 1
-        "Feedback_2": "Chưa đánh giá"  # Slot 2
+        "Feedback_1": "Chưa đánh giá", "Label_1": "",
+        "Feedback_2": "Chưa đánh giá", "Label_2": ""
     }
     try:
         df = pd.read_csv(LOG_FILE)
@@ -169,19 +170,19 @@ def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
     except: pass
     return img_id
 
-# --- HÀM CẬP NHẬT FEEDBACK (QUAN TRỌNG) ---
-def update_feedback_slot(selected_id, feedback_value, slot):
-    """Cập nhật feedback vào slot 1 hoặc slot 2"""
+# --- HÀM CẬP NHẬT FEEDBACK & LABEL ---
+def update_feedback_slot(selected_id, feedback_value, label_value, slot):
     try:
         df = pd.read_csv(LOG_FILE)
-        # Ép kiểu column ID về string để so sánh chính xác
         df['ID'] = df['ID'].astype(str)
         selected_id = str(selected_id)
         
         if slot == 1:
             df.loc[df["ID"] == selected_id, "Feedback_1"] = feedback_value
+            df.loc[df["ID"] == selected_id, "Label_1"] = label_value
         elif slot == 2:
             df.loc[df["ID"] == selected_id, "Feedback_2"] = feedback_value
+            df.loc[df["ID"] == selected_id, "Label_2"] = label_value
             
         df.to_csv(LOG_FILE, index=False)
         return True
@@ -258,7 +259,7 @@ def process_image(image_file):
     img_id = save_case(display_img, findings_db, has_danger, patient_info)
     return display_img, findings_db, has_danger, time.time() - start_t, patient_info, img_id
 
-# ================= 6. TẠO HTML REPORT =================
+# ================= 6. HTML REPORT =================
 def generate_html_report(findings_db, has_danger, patient_info, img_id):
     current_time = datetime.now().strftime('%H:%M ngày %d/%m/%Y')
     
@@ -298,7 +299,7 @@ def generate_html_report(findings_db, has_danger, patient_info, img_id):
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3063/3063176.png", width=60)
     st.title("ĐIỀU KHIỂN")
-    mode = st.radio("Chọn chức năng:", ["🔍 Phân Tích Ca Bệnh", "📂 Hội Chẩn & Review"])
+    mode = st.radio("Chọn chức năng:", ["🔍 Phân Tích Ca Bệnh", "📂 Hội Chẩn (Gán Nhãn)"])
     st.divider()
     with st.expander("Trạng thái Model AI"):
         for s in MODEL_STATUS: st.caption(s)
@@ -322,85 +323,85 @@ if mode == "🔍 Phân Tích Ca Bệnh":
                     st.toast("✅ Đã lưu kết quả vào hồ sơ hội chẩn!", icon="💾")
                 else: st.error(findings)
 
-elif mode == "📂 Hội Chẩn & Review":
-    st.title("📂 KHO DỮ LIỆU & HỘI CHẨN")
+elif mode == "📂 Hội Chẩn (Gán Nhãn)":
+    st.title("📂 KHO DỮ LIỆU & GÁN NHÃN LẠI")
     
     if os.path.exists(LOG_FILE):
         try:
             df = pd.read_csv(LOG_FILE)
-            # Ensure ID is string
             df['ID'] = df['ID'].astype(str)
-            df = df.iloc[::-1] # Mới nhất lên đầu
+            df = df.iloc[::-1]
             
-            # --- HIỂN THỊ DANH SÁCH 2 CỘT FEEDBACK ---
+            # --- HIỂN THỊ DANH SÁCH ---
             st.dataframe(
-                df[["ID", "Patient_Info", "Result", "Feedback_1", "Feedback_2", "Details"]], 
-                use_container_width=True, 
-                hide_index=True,
-                column_config={
-                    "Feedback_1": st.column_config.TextColumn("Đánh giá Lần 1"),
-                    "Feedback_2": st.column_config.TextColumn("Đánh giá Lần 2"),
-                }
+                df[["ID", "Patient_Info", "Result", "Feedback_1", "Feedback_2"]], 
+                use_container_width=True, hide_index=True
             )
-            
             st.divider()
             
-            # CHỌN CA ĐỂ HỘI CHẨN
+            # --- KHU VỰC HỘI CHẨN ---
             id_list = df["ID"].unique()
-            selected_id = st.selectbox("👉 Chọn Mã hồ sơ (ID) để xem và đánh giá:", id_list)
+            selected_id = st.selectbox("👉 Chọn Mã hồ sơ (ID) để hội chẩn:", id_list)
             
             if selected_id:
                 record = df[df["ID"] == selected_id].iloc[0]
                 fb1 = record.get("Feedback_1", "Chưa đánh giá")
                 fb2 = record.get("Feedback_2", "Chưa đánh giá")
+                lbl1 = record.get("Label_1", "")
+                lbl2 = record.get("Label_2", "")
                 
                 col_img, col_act = st.columns([1, 1])
-                
                 with col_img:
                     img_path = os.path.join(IMAGES_DIR, record["Image_Path"])
-                    if os.path.exists(img_path):
-                        st.image(img_path, caption=f"Hồ sơ: {selected_id}", use_container_width=True)
+                    if os.path.exists(img_path): st.image(img_path, caption=f"Hồ sơ: {selected_id}", use_container_width=True)
                     else: st.error("Không tìm thấy ảnh gốc.")
                 
                 with col_act:
                     st.info(f"**Bệnh nhân:** {record['Patient_Info']}")
                     st.warning(f"**AI Kết luận:** {record['Result']}")
-                    st.write(f"**Chi tiết:** {record['Details']}")
-                    
                     st.markdown("---")
                     st.subheader("📝 Ghi nhận ý kiến chuyên môn")
                     
                     options = ["Chưa đánh giá", "✅ Đồng thuận (Đúng)", "❌ Sai (Dương tính giả)", "❌ Sai (Âm tính giả)"]
                     
-                    # LOGIC HỘI CHẨN 2 BƯỚC
+                    # LOGIC HỘI CHẨN 2 BƯỚC + CHỌN BỆNH LÝ
+                    
+                    # --- LẦN 1 ---
                     if pd.isna(fb1) or fb1 == "Chưa đánh giá":
-                        # Chưa có ai đánh giá -> Mở Slot 1
                         st.write("🔹 **Lần 1:** Chưa có đánh giá.")
-                        new_val = st.radio("Ý kiến của bạn (Lần 1):", options, index=0, key="fb1")
+                        new_val = st.radio("Ý kiến Lần 1:", options, index=0, key="fb1")
+                        
+                        label_val = ""
+                        if "Sai" in new_val: # Nếu sai thì hiện list bệnh để chọn lại
+                            label_val = st.selectbox("👉 Thực tế bệnh nhân bị gì?", DIAGNOSIS_LIST, key="lb1")
+                        
                         if st.button("Lưu Đánh Giá Lần 1"):
                             if new_val != "Chưa đánh giá":
-                                if update_feedback_slot(selected_id, new_val, 1):
-                                    st.success("Đã lưu đánh giá Lần 1!")
+                                if update_feedback_slot(selected_id, new_val, label_val, 1):
+                                    st.success("Đã lưu!")
                                     time.sleep(0.5)
                                     st.rerun()
                     
+                    # --- LẦN 2 ---
                     elif pd.isna(fb2) or fb2 == "Chưa đánh giá":
-                        # Đã có Slot 1 -> Mở Slot 2
-                        st.success(f"✅ **Lần 1:** {fb1}")
+                        st.success(f"✅ **Lần 1:** {fb1} {f'({lbl1})' if lbl1 else ''}")
                         st.write("🔹 **Lần 2:** Chưa có đánh giá.")
-                        new_val = st.radio("Ý kiến của bạn (Lần 2):", options, index=0, key="fb2")
-                        if st.button("Lưu Đánh Giá Lần 2 (Kết thúc hội chẩn)"):
+                        new_val = st.radio("Ý kiến Lần 2:", options, index=0, key="fb2")
+                        
+                        label_val = ""
+                        if "Sai" in new_val:
+                            label_val = st.selectbox("👉 Thực tế bệnh nhân bị gì?", DIAGNOSIS_LIST, key="lb2")
+                            
+                        if st.button("Lưu Đánh Giá Lần 2 (Chốt hồ sơ)"):
                             if new_val != "Chưa đánh giá":
-                                if update_feedback_slot(selected_id, new_val, 2):
-                                    st.success("Đã lưu đánh giá Lần 2!")
+                                if update_feedback_slot(selected_id, new_val, label_val, 2):
+                                    st.success("Đã lưu!")
                                     time.sleep(0.5)
                                     st.rerun()
-                    
                     else:
-                        # Đã đủ 2 slot -> Khóa
-                        st.success(f"✅ **Lần 1:** {fb1}")
-                        st.success(f"✅ **Lần 2:** {fb2}")
-                        st.info("🔒 Hồ sơ đã đủ 2 lần hội chẩn. Không thể chỉnh sửa.")
+                        st.success(f"✅ **Lần 1:** {fb1} {f'({lbl1})' if lbl1 else ''}")
+                        st.success(f"✅ **Lần 2:** {fb2} {f'({lbl2})' if lbl2 else ''}")
+                        st.info("🔒 Hồ sơ đã đủ 2 lần hội chẩn. Dữ liệu đã sẵn sàng để train lại.")
 
         except Exception as e: st.error(f"Lỗi đọc dữ liệu: {e}")
     else: st.info("Chưa có dữ liệu.")
