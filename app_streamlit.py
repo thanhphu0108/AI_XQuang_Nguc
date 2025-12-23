@@ -16,7 +16,7 @@ import google.generativeai as genai
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital (V23.1 - Debug Mode)",
+    page_title="AI Hospital (V23.2 - Model Fixed)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -45,7 +45,6 @@ TRAIN_DATA_DIR = os.path.join(BASE_PATH, "dataset_yolo_ready")
 
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
-# Cấu trúc file log chuẩn
 REQUIRED_COLUMNS = ["ID", "Time", "Result", "Details", "Image_Path", "Patient_Info", 
                     "Feedback_1", "Label_1", "Feedback_2", "Label_2", "AI_Reasoning"]
 
@@ -91,18 +90,26 @@ def load_models():
 
 MODELS, MODEL_STATUS, DEVICE = load_models()
 
+# --- HÀM GỌI GEMINI (ĐÃ FIX LỖI MODEL NAME) ---
 def ask_gemini_for_label(api_key, image_path, clinical_info=""):
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # FIX: Dùng tên 'gemini-1.5-flash-latest' thay vì 'gemini-1.5-flash' để tránh lỗi 404
+        # Nếu vẫn lỗi, thử đổi thành 'gemini-pro-vision'
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        except:
+            model = genai.GenerativeModel('gemini-1.5-pro-latest')
+
         img = Image.open(image_path)
         labels_str = ", ".join([f"'{l}'" for l in ALLOWED_LABELS])
         prompt = f"Bạn là BS chẩn đoán hình ảnh. Lâm sàng: {clinical_info}. Xem ảnh X-quang và chẩn đoán theo danh sách: [{labels_str}]. Output JSON: {{'labels': [], 'reasoning': ''}}"
+        
         response = model.generate_content([prompt, img], generation_config={"response_mime_type": "application/json"})
         return json.loads(response.text)
     except Exception as e: 
-        # TRẢ VỀ LỖI CỤ THỂ ĐỂ HIỂN THỊ
-        return {"labels": [], "reasoning": f"Lỗi kết nối Gemini: {str(e)}"}
+        return {"labels": [], "reasoning": f"Lỗi Gemini: {str(e)}. Hãy thử tạo Key mới tại aistudio.google.com"}
 
 def read_dicom_image(file_buffer):
     try:
@@ -247,7 +254,7 @@ def export_selected_data(df_selected, use_anatomy_auto_label=True):
     shutil.make_archive(TRAIN_DATA_DIR, 'zip', TRAIN_DATA_DIR)
     return f"Đã xuất {count} ảnh!", f"{TRAIN_DATA_DIR}.zip"
 
-# --- HÀM PHÂN TÍCH YOLO (KHÔI PHỤC LẠI) ---
+# --- HÀM PHÂN TÍCH YOLO ---
 def process_image_yolo(image_file):
     if "ANATOMY" not in MODELS: return None, "Thiếu Anatomy", False, 0, "", ""
     start_t = time.time()
@@ -340,7 +347,7 @@ with st.sidebar:
         for s in MODEL_STATUS: st.caption(s)
 
 if mode == "🔍 Phân Tích & Upload":
-    st.title("🏥 TRỢ LÝ CHẨN ĐOÁN HÌNHẢNH (AI)")
+    st.title("🏥 TRỢ LÝ CHẨN ĐOÁN HÌNH ẢNH (AI)")
     col1, col2 = st.columns([1, 1.5])
     with col1:
         uploaded_file = st.file_uploader("Tải ảnh", type=["jpg", "png", "jpeg", "dcm", "dicom"])
@@ -389,13 +396,12 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                             gemini_labels = res.get("labels", [])
                             gemini_reason = res.get("reasoning", "")
                             
-                            # --- HIỂN THỊ KẾT QUẢ RÕ RÀNG ---
+                            # HIỂN THỊ KẾT QUẢ
                             if gemini_labels:
                                 st.markdown(f'<div class="gemini-box"><b>🤖 Gemini Gợi ý:</b> {", ".join(gemini_labels)}<br><i>"{gemini_reason}"</i></div>', unsafe_allow_html=True)
                             else:
-                                # NẾU LỖI, HIỆN LỖI RA LUÔN
-                                err_msg = gemini_reason if gemini_reason else "Lỗi không xác định."
-                                st.error(f"⚠️ Gemini không trả lời được: {err_msg}")
+                                err_msg = gemini_reason if gemini_reason else "Không xác định."
+                                st.error(f"⚠️ Lỗi Gemini: {err_msg}")
                 else: st.info("💡 Nhập Gemini API Key để dùng tính năng gợi ý.")
 
                 fb1 = str(record.get("Feedback_1", ""))
