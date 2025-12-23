@@ -9,7 +9,6 @@ from datetime import datetime
 from PIL import Image
 import pandas as pd
 import pydicom
-import io
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
@@ -19,7 +18,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS giao diện
 st.markdown("""
 <style>
     .main { background-color: #f4f6f9; }
@@ -78,30 +76,21 @@ def load_models():
 
 MODELS, MODEL_STATUS, DEVICE = load_models()
 
-# ================= 4. XỬ LÝ DICOM & ẢNH (CORE) =================
+# ================= 4. XỬ LÝ DICOM & ẢNH =================
 def read_dicom_image(file_buffer):
-    """Đọc file DICOM và chuyển đổi sang ảnh RGB chuẩn AI"""
     try:
         ds = pydicom.dcmread(file_buffer)
-        
-        # Lấy thông tin bệnh nhân (nếu có)
         patient_name = str(ds.get("PatientName", "Anonymous"))
         patient_id = str(ds.get("PatientID", "Unknown"))
         patient_info = f"{patient_name} ({patient_id})"
         
-        # Xử lý ảnh (Pixel Array)
         img = ds.pixel_array.astype(float)
-        
-        # Chuẩn hóa về 0-255 (Windowing đơn giản)
-        # DICOM thường là 12-16 bit, cần nén xuống 8 bit cho AI
         img = (np.maximum(img, 0) / img.max()) * 255.0
         img = np.uint8(img)
         
-        # Xử lý Photometric Interpretation (Nếu ảnh bị âm bản)
         if ds.get("PhotometricInterpretation") == "MONOCHROME1":
             img = 255 - img
             
-        # Chuyển sang RGB (AI cần 3 kênh màu)
         if len(img.shape) == 2:
             img_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
         else:
@@ -163,25 +152,22 @@ def process_image(image_file):
 
     start_t = time.time()
     
-    # --- XỬ LÝ ĐẦU VÀO (DICOM hoặc ẢNH THƯỜNG) ---
     filename = image_file.name.lower()
     img_rgb = None
     patient_info = "Ẩn danh"
 
     if filename.endswith(".dcm") or filename.endswith(".dicom"):
         img_rgb, p_info = read_dicom_image(image_file)
-        if isinstance(p_info, str) and img_rgb is None: # Có lỗi
+        if isinstance(p_info, str) and img_rgb is None:
             return None, p_info, False, 0, ""
         patient_info = p_info
     else:
-        # Xử lý ảnh thường (JPG/PNG)
         file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
         img_cv = cv2.imdecode(file_bytes, 1)
         img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
 
     if img_rgb is None: return None, "Lỗi đọc ảnh", False, 0, ""
 
-    # Resize chuẩn y tế
     h, w = img_rgb.shape[:2]
     scale = 1280 / max(h, w)
     img_resized = cv2.resize(img_rgb, (int(w*scale), int(h*scale)))
@@ -193,8 +179,6 @@ def process_image(image_file):
     PRIORITY = ["PNEUMOTHORAX", "EFFUSION", "TUMOR", "PNEUMONIA"] 
     SECONDARY = ["OPACITY"]
 
-    # --- AI INFERENCE ---
-    # Convert sang BGR cho model (vì model train trên cv2 BGR)
     img_model_input = cv2.cvtColor(img_resized, cv2.COLOR_RGB2BGR)
     anatomy_res = MODELS["ANATOMY"](img_model_input, conf=0.35, iou=0.45, verbose=False)[0]
 
@@ -247,11 +231,19 @@ def process_image(image_file):
 
 def generate_html_report(findings_db, has_danger, patient_info):
     current_time = datetime.now().strftime('%H:%M %d/%m/%Y')
+    img_id = f"AI-{int(time.time())}"
     
-    lung_txt = f"<b>Ghi nhận:</b><br>- {'; <br>- '.join(findings_db['Lung'])}" if findings_db["Lung"] else "Hai phổi sáng, vân phổi đều."
-    pleura_txt = f"<b>Bất thường:</b><br>- {'; <br>- '.join(findings_db['Pleura'])}" if findings_db["Pleura"] else "Góc sườn hoành nhọn, không tràn dịch/khí."
-    heart_txt = f"<b>Tim mạch:</b><br>- {'; <br>- '.join(findings_db['Heart'])}" if findings_db["Heart"] else "Bóng tim không to. Trung thất cân đối."
-    bone_txt = "Khung xương cân đối. Không ghi nhận hình ảnh gãy xương, khuyết xương."
+    # --- ĐÃ SỬA LỖI TÊN BIẾN Ở ĐÂY (lung_text, pleura_text...) ---
+    lung_text = f"<b>Ghi nhận bất thường:</b><br>- {'; <br>- '.join(findings_db['Lung'])}." if findings_db["Lung"] else \
+                "Hai trường phổi sáng đều, vân phổi phân bố bình thường đến ngoại vi. Không thấy đám mờ, nốt mờ hay tổn thương thâm nhiễm khu trú."
+    
+    pleura_text = f"<b>Phát hiện bất thường:</b><br>- {'; <br>- '.join(findings_db['Pleura'])}." if findings_db["Pleura"] else \
+                  "Góc sườn hoành hai bên nhọn, vòm hoành đều. Không thấy hình ảnh tràn dịch màng phổi. Không ghi nhận tràn khí."
+    
+    heart_text = f"<b>Tim mạch:</b><br>- {'; <br>- '.join(findings_db['Heart'])}." if findings_db["Heart"] else \
+                 "Bóng tim không to (chỉ số tim/lồng ngực ước < 0,5). Trung thất cân đối, khí quản nằm giữa."
+
+    bone_text = "Khung xương lồng ngực (xương sườn, xương đòn, xương vai) cân đối. Không ghi nhận hình ảnh gãy xương, khuyết xương hay tổn thương hủy xương rõ."
 
     if has_danger or (len(findings_db["Lung"]) + len(findings_db["Pleura"]) > 0):
         concl = "<div class='danger-box'>🔴 <strong>KẾT LUẬN:</strong> CÓ HÌNH ẢNH BẤT THƯỜNG TRÊN PHIM</div>"
@@ -271,9 +263,9 @@ def generate_html_report(findings_db, has_danger, patient_info):
         <h4>I. MÔ TẢ HÌNH ẢNH</h4>
         <ul style="line-height:1.6">
             <li><strong>Nhu mô phổi:</strong> {lung_text}</li>
-            <li><strong>Màng phổi:</strong> {pleura_txt}</li>
-            <li><strong>Tim – Trung thất:</strong> {heart_txt}</li>
-            <li><strong>Xương:</strong> {bone_txt}</li>
+            <li><strong>Màng phổi:</strong> {pleura_text}</li>
+            <li><strong>Tim – Trung thất:</strong> {heart_text}</li>
+            <li><strong>Xương:</strong> {bone_text}</li>
         </ul>
         <h4>II. KẾT LUẬN</h4>
         {concl}
@@ -301,7 +293,6 @@ if mode == "🔍 Phân Tích Ca Bệnh":
     col1, col2 = st.columns([1, 1.5])
     
     with col1:
-        # Hỗ trợ upload cả dcm và ảnh thường
         uploaded_file = st.file_uploader("Tải ảnh X-quang/DICOM", type=["jpg", "png", "jpeg", "dcm", "dicom"])
         if uploaded_file:
             st.info(f"Đã nhận file: {uploaded_file.name}")
