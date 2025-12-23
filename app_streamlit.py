@@ -12,31 +12,40 @@ import pydicom
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital System (PACS View)",
+    page_title="Hệ Thống Chẩn Đoán Hình Ảnh (PACS View)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# CSS Tùy chỉnh (Giao diện PACS Bệnh viện)
+# CSS CHUẨN ĐỂ HIỂN THỊ REPORT ĐẸP NHƯ FILE IN
 st.markdown("""
 <style>
-    .main { background-color: #f0f2f6; }
+    .main { background-color: #f4f6f9; }
     
+    /* Khung chứa báo cáo - Giống tờ giấy A4 */
     .report-container {
         background-color: white;
         padding: 40px;
         border-radius: 5px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
         font-family: 'Times New Roman', serif;
         color: #000;
         line-height: 1.5;
         font-size: 16px;
     }
     
-    h3 { color: #002f6c; font-weight: bold; margin-bottom: 5px; }
-    .hospital-header h2 { color: #002f6c; text-transform: uppercase; margin: 0; }
-    
+    /* Header Bệnh Viện */
+    .hospital-header {
+        text-align: center;
+        border-bottom: 2px solid #002f6c;
+        padding-bottom: 10px;
+        margin-bottom: 20px;
+    }
+    .hospital-header h2 { margin: 0; color: #002f6c; text-transform: uppercase; font-size: 24px; }
+    .hospital-header p { margin: 5px 0 0 0; font-style: italic; color: #555; }
+
+    /* Tiêu đề mục (I. MÔ TẢ...) - Style Thông tư */
     .section-header {
         background-color: #eee; 
         padding: 8px; 
@@ -44,11 +53,29 @@ st.markdown("""
         margin: 20px 0 15px 0; 
         font-weight: bold;
         color: #002f6c;
-        font-size: 18px;
+        font-size: 16px;
+        text-transform: uppercase;
     }
     
+    /* Box Kỹ thuật */
+    .tech-box {
+        margin-top: 15px; 
+        padding: 12px; 
+        background: #f1f8e9; 
+        border: 1px solid #c5e1a5; 
+        border-radius: 4px;
+        color: #2e7d32;
+    }
+
+    /* List kết quả */
+    ul { margin-top: 0px; padding-left: 20px; margin-bottom: 10px; }
+    li { margin-bottom: 5px; }
+
+    /* Button */
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 45px; }
-    td { vertical-align: top; padding: 4px; }
+    
+    /* Table căn chỉnh */
+    .info-table td { padding: 4px 2px; vertical-align: top; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -132,7 +159,8 @@ def get_finding_text(disease, conf, location):
 
 def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    img_id = f"AI-{timestamp}"[-10:]
+    # Tạo mã hồ sơ ngắn gọn (VD: 223_095544)
+    img_id = f"{datetime.now().strftime('%j_%H%M%S')}" 
     file_name = f"XRAY_{timestamp}.jpg"
     
     save_path = os.path.join(IMAGES_DIR, file_name)
@@ -143,7 +171,7 @@ def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
     detail_list = findings_db["Lung"] + findings_db["Pleura"] + findings_db["Heart"]
     details = " | ".join(detail_list).replace("**", "") if detail_list else "Không ghi nhận bất thường"
     
-    new_record = {"ID": img_id, "Time": datetime.now().strftime("%d/%m/%Y %H:%M"), 
+    new_record = {"ID": img_id, "Time": datetime.now().strftime("%H:%M %d/%m/%Y"), 
                   "Result": result, "Details": details, "Image_Path": file_name, "Patient_Info": patient_info}
     try:
         df = pd.read_csv(LOG_FILE)
@@ -153,9 +181,7 @@ def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
     return img_id
 
 def process_image(image_file):
-    # --- QUAN TRỌNG: TRẢ VỀ ĐỦ 6 GIÁ TRỊ TRONG MỌI TRƯỜNG HỢP ---
-    # Return format: img_out, findings_db, has_danger, process_time, patient_info, img_id
-    
+    # --- RETURN ĐỦ 6 GIÁ TRỊ (FIX LỖI CRASH) ---
     if "ANATOMY" not in MODELS: 
         return None, "Thiếu Anatomy", False, 0, "", ""
     
@@ -164,7 +190,6 @@ def process_image(image_file):
     img_rgb = None
     patient_info = "Ẩn danh"
 
-    # Đọc ảnh
     if filename.endswith(('.dcm', '.dicom')):
         img_rgb, p_info = read_dicom_image(image_file)
         if isinstance(p_info, str) and img_rgb is None: 
@@ -178,7 +203,6 @@ def process_image(image_file):
     if img_rgb is None: 
         return None, "Lỗi file ảnh", False, 0, "", ""
 
-    # Resize & Prepare
     h, w = img_rgb.shape[:2]
     scale = 1280 / max(h, w)
     img_resized = cv2.resize(img_rgb, (int(w*scale), int(h*scale)))
@@ -189,7 +213,6 @@ def process_image(image_file):
     PRIORITY = ["PNEUMOTHORAX", "EFFUSION", "TUMOR", "PNEUMONIA"] 
     SECONDARY = ["OPACITY"]
 
-    # AI Inference
     img_bgr = cv2.cvtColor(img_resized, cv2.COLOR_RGB2BGR)
     anatomy_res = MODELS["ANATOMY"](img_bgr, conf=0.35, iou=0.45, verbose=False)[0]
 
@@ -235,16 +258,16 @@ def process_image(image_file):
 
     img_id = save_case(display_img, findings_db, has_danger, patient_info)
     
-    # Return đủ 6 giá trị
     return display_img, findings_db, has_danger, time.time() - start_t, patient_info, img_id
 
-# ================= 6. HTML REPORT (CHUẨN THÔNG TƯ) =================
+# ================= 6. TẠO HTML REPORT (ĐÚNG MẪU BẠN GỬI) =================
 def generate_html_report(findings_db, has_danger, patient_info, img_id):
     current_time = datetime.now().strftime('%H:%M ngày %d/%m/%Y')
     
-    # Logic Text Generator
+    # 1. Nhu mô phổi
     if not findings_db["Lung"]:
-        lung_html = """<ul style="margin-top:0px; padding-left:20px;">
+        lung_html = """
+        <ul style="margin-top:0px; padding-left:20px;">
             <li>Hai trường phổi sáng đều.</li>
             <li>Không ghi nhận đám mờ, nốt mờ, tổn thương thâm nhiễm hay đông đặc khu trú.</li>
             <li>Vân mạch phổi phân bố đều từ rốn phổi ra ngoại vi, không ghi nhận vùng mất vân mạch bất thường.</li>
@@ -252,8 +275,10 @@ def generate_html_report(findings_db, has_danger, patient_info, img_id):
     else:
         lung_html = f'<ul style="margin-top:0px; padding-left:20px; color:#c62828;"><li><b>Ghi nhận bất thường:</b> {"; ".join(findings_db["Lung"])}</li></ul>'
 
+    # 2. Màng phổi
     if not findings_db["Pleura"]:
-        pleura_html = """<ul style="margin-top:0px; padding-left:20px;">
+        pleura_html = """
+        <ul style="margin-top:0px; padding-left:20px;">
             <li>Góc sườn hoành hai bên nhọn, vòm hoành đều.</li>
             <li>Không thấy hình ảnh tràn dịch màng phổi.</li>
             <li>Không ghi nhận vùng tăng sáng ngoại vi hay đường màng phổi tạng gợi ý tràn khí màng phổi, kể cả vùng đỉnh phổi hai bên.</li>
@@ -261,20 +286,25 @@ def generate_html_report(findings_db, has_danger, patient_info, img_id):
     else:
         pleura_html = f'<ul style="margin-top:0px; padding-left:20px; color:#c62828;"><li><b>Phát hiện bất thường:</b> {"; ".join(findings_db["Pleura"])}</li></ul>'
 
+    # 3. Tim - Trung thất
     if not findings_db["Heart"]:
-        heart_html = """<ul style="margin-top:0px; padding-left:20px;">
+        heart_html = """
+        <ul style="margin-top:0px; padding-left:20px;">
             <li>Bóng tim không to (CTR < 0,5).</li>
             <li>Trung thất cân đối, khí quản nằm giữa, không bị đẩy lệch.</li>
         </ul>"""
     else:
         heart_html = f'<ul style="margin-top:0px; padding-left:20px; color:#e65100;"><li><b>Tim mạch:</b> {"; ".join(findings_db["Heart"])}</li></ul>'
 
-    bone_html = """<ul style="margin-top:0px; padding-left:20px;">
+    # 4. Xương & Phần mềm
+    bone_html = """
+    <ul style="margin-top:0px; padding-left:20px;">
         <li>Khung xương lồng ngực cân đối. Không ghi nhận hình ảnh gãy xương sườn, xương đòn.</li>
         <li>Không thấy dấu hiệu <b>khuyết xương</b>, <b>tiêu xương</b> hay tổn thương hủy xương khu trú.</li>
         <li>Phần mềm thành ngực không ghi nhận bất thường.</li>
     </ul>"""
 
+    # KẾT LUẬN & KHUYẾN NGHỊ
     if has_danger or (len(findings_db["Lung"]) + len(findings_db["Pleura"]) > 0):
         conclusion_html = """
         <div style='color:#c62828; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>
@@ -296,7 +326,7 @@ def generate_html_report(findings_db, has_danger, patient_info, img_id):
             – Nếu có triệu chứng hô hấp hoặc đau ngực kéo dài, cân nhắc chụp lại phim hoặc phương tiện chẩn đoán hình ảnh khác (CT ngực).
         </div>"""
 
-    # HTML Layout
+    # --- HTML RENDER (GIAO DIỆN MỚI) ---
     html = f"""
     <div class="report-container">
         <div class="hospital-header">
@@ -305,11 +335,18 @@ def generate_html_report(findings_db, has_danger, patient_info, img_id):
         </div>
         
         <div style="margin-bottom: 20px; font-size: 15px;">
-            <table style="width:100%;">
-                <tr><td style="width:60%;"><strong>Bệnh nhân:</strong> {patient_info}</td><td style="text-align:right;"><strong>Thời gian:</strong> {current_time}</td></tr>
-                <tr><td><strong>Mã hồ sơ:</strong> {img_id}</td><td></td></tr>
+            <table class="info-table" style="width:100%;">
+                <tr>
+                    <td style="width:60%;"><strong>Bệnh nhân:</strong> {patient_info}</td>
+                    <td style="text-align:right;"><strong>Thời gian:</strong> {current_time}</td>
+                </tr>
+                <tr>
+                    <td><strong>Mã hồ sơ:</strong> {img_id}</td>
+                    <td></td>
+                </tr>
             </table>
-            <div style="margin-top:15px; padding:12px; background:#f1f8e9; border:1px solid #c5e1a5; border-radius: 4px;">
+            
+            <div class="tech-box">
                 <strong>⚙️ KỸ THUẬT:</strong><br>
                 X-quang ngực thẳng (PA view), tư thế đúng, hít sâu tối đa.<br>
                 Độ xuyên thấu và độ tương phản đạt yêu cầu đánh giá nhu mô phổi, trung thất và xương lồng ngực.
@@ -317,13 +354,24 @@ def generate_html_report(findings_db, has_danger, patient_info, img_id):
         </div>
 
         <div class="section-header">I. MÔ TẢ HÌNH ẢNH</div>
-        <p style="margin-bottom:5px;"><strong>1. Nhu mô phổi</strong></p>{lung_html}
-        <p style="margin-bottom:5px;"><strong>2. Màng phổi</strong></p>{pleura_html}
-        <p style="margin-bottom:5px;"><strong>3. Tim – Trung thất</strong></p>{heart_html}
-        <p style="margin-bottom:5px;"><strong>4. Xương lồng ngực & phần mềm thành ngực</strong></p>{bone_html}
+        
+        <p style="margin-bottom:5px;"><strong>1. Nhu mô phổi</strong></p>
+        {lung_html}
+
+        <p style="margin-bottom:5px;"><strong>2. Màng phổi</strong></p>
+        {pleura_html}
+
+        <p style="margin-bottom:5px;"><strong>3. Tim – Trung thất</strong></p>
+        {heart_html}
+
+        <p style="margin-bottom:5px;"><strong>4. Xương lồng ngực & phần mềm thành ngực</strong></p>
+        {bone_html}
 
         <div class="section-header" style="margin-top:25px;">II. KẾT LUẬN & KHUYẾN NGHỊ</div>
-        <div style="padding:15px; border:1px dashed #ccc; margin-bottom:15px;">{conclusion_html}</div>
+        
+        <div style="padding:15px; border:1px dashed #ccc; margin-bottom:15px;">
+            {conclusion_html}
+        </div>
 
         <div style="margin-top: 50px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 13px; color: #666; text-align: center; font-style: italic;">
             __________________________________________________<br>
@@ -356,11 +404,13 @@ if mode == "🔍 Phân Tích Ca Bệnh":
     with col2:
         if uploaded_file and analyze:
             with st.spinner("🤖 Đang phân tích theo cấu trúc giải phẫu..."):
+                # GỌI HÀM VÀ LẤY ĐỦ 6 GIÁ TRỊ TRẢ VỀ
                 img_out, findings, danger, p_time, p_info, img_id = process_image(uploaded_file)
                 
                 if img_out is not None:
                     t1, t2 = st.tabs(["🖼️ Hình ảnh AI", "📄 Phiếu Kết Quả"])
                     with t1: st.image(img_out, caption=f"Vùng tổn thương (Processing: {p_time:.2f}s)", use_container_width=True)
+                    # GỌI HÀM SINH HTML
                     with t2: st.markdown(generate_html_report(findings, danger, p_info, img_id), unsafe_allow_html=True)
                     st.toast("✅ Đã lưu kết quả vào hồ sơ!", icon="💾")
                 else:
