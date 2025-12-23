@@ -12,75 +12,39 @@ import pydicom
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="Hệ Thống Chẩn Đoán Hình Ảnh (PACS View)",
+    page_title="Hệ Thống hổ trợ Chẩn Đoán Hình Ảnh X-quang ngực thẳng",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# CSS CHUẨN ĐỂ HIỂN THỊ REPORT
+# CSS GIAO DIỆN CHUẨN
 st.markdown("""
 <style>
     .main { background-color: #f4f6f9; }
-    
-    /* Container báo cáo */
     .report-container {
-        background-color: white;
-        padding: 40px;
-        border-radius: 5px;
+        background-color: white; padding: 40px; border-radius: 5px;
         box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-        font-family: 'Times New Roman', serif;
-        color: #000;
-        line-height: 1.5;
-        font-size: 16px;
+        font-family: 'Times New Roman', serif; color: #000; line-height: 1.5; font-size: 16px;
     }
-    
-    /* Header */
-    .hospital-header {
-        text-align: center;
-        border-bottom: 2px solid #002f6c;
-        padding-bottom: 10px;
-        margin-bottom: 20px;
-    }
+    .hospital-header { text-align: center; border-bottom: 2px solid #002f6c; padding-bottom: 10px; margin-bottom: 20px; }
     .hospital-header h2 { margin: 0; color: #002f6c; text-transform: uppercase; font-size: 24px; }
-    .hospital-header p { margin: 5px 0 0 0; font-style: italic; color: #555; }
-
-    /* Tiêu đề mục */
-    .section-header {
-        background-color: #eee; 
-        padding: 8px; 
-        border-left: 5px solid #002f6c; 
-        margin: 20px 0 15px 0; 
-        font-weight: bold;
-        color: #002f6c;
-        font-size: 16px;
-        text-transform: uppercase;
-    }
-    
-    /* Box Kỹ thuật */
-    .tech-box {
-        margin-top: 15px; 
-        padding: 12px; 
-        background: #f1f8e9; 
-        border: 1px solid #c5e1a5; 
-        border-radius: 4px;
-        color: #000;
-    }
-
-    /* List */
+    .section-header { background-color: #eee; padding: 8px; border-left: 5px solid #002f6c; margin: 20px 0 15px 0; font-weight: bold; color: #002f6c; font-size: 16px; text-transform: uppercase; }
+    .tech-box { margin-top: 15px; padding: 12px; background: #f1f8e9; border: 1px solid #c5e1a5; border-radius: 4px; color: #000; }
     ul { margin-top: 0px; padding-left: 20px; margin-bottom: 10px; }
     li { margin-bottom: 5px; }
-
-    /* Button */
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 45px; }
-    
-    /* Table */
     .info-table { width: 100%; }
     .info-table td { padding: 4px 2px; vertical-align: top; }
+    
+    /* Highlight trạng thái hội chẩn */
+    .status-badge { padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; color: white; }
+    .status-wait { background-color: #ff9800; }
+    .status-done { background-color: #4caf50; }
 </style>
 """, unsafe_allow_html=True)
 
-# ================= 2. CẤU HÌNH HỆ THỐNG =================
+# ================= 2. CẤU HÌNH HỆ THỐNG & DỮ LIỆU =================
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_PATH, "models")
 HISTORY_DIR = os.path.join(BASE_PATH, "history")
@@ -88,8 +52,29 @@ IMAGES_DIR = os.path.join(HISTORY_DIR, "images")
 LOG_FILE = os.path.join(HISTORY_DIR, "log_book.csv")
 
 os.makedirs(IMAGES_DIR, exist_ok=True)
+
+# --- KHỞI TẠO HOẶC NÂNG CẤP FILE CSV ---
 if not os.path.exists(LOG_FILE):
-    pd.DataFrame(columns=["ID", "Time", "Result", "Details", "Image_Path", "Patient_Info"]).to_csv(LOG_FILE, index=False)
+    # Tạo mới nếu chưa có
+    pd.DataFrame(columns=["ID", "Time", "Result", "Details", "Image_Path", "Patient_Info", "Feedback_1", "Feedback_2"]).to_csv(LOG_FILE, index=False)
+else:
+    # Nâng cấp file cũ nếu thiếu cột (Migration)
+    try:
+        df = pd.read_csv(LOG_FILE)
+        changed = False
+        if "Feedback" in df.columns: # Đổi tên cột cũ
+            df.rename(columns={"Feedback": "Feedback_1"}, inplace=True)
+            changed = True
+        if "Feedback_1" not in df.columns:
+            df["Feedback_1"] = "Chưa đánh giá"
+            changed = True
+        if "Feedback_2" not in df.columns:
+            df["Feedback_2"] = "Chưa đánh giá"
+            changed = True
+        
+        if changed:
+            df.to_csv(LOG_FILE, index=False)
+    except: pass
 
 DOCTOR_ROSTER = {
     "ANATOMY":      "Dr_Anatomy.pt",      
@@ -125,11 +110,9 @@ MODELS, MODEL_STATUS, DEVICE = load_models()
 def read_dicom_image(file_buffer):
     try:
         ds = pydicom.dcmread(file_buffer)
-        p_name = str(ds.get("PatientName", "Anonymous"))
+        p_name = str(ds.get("PatientName", "Anonymous")).replace('^', ' ').strip()
         p_id = str(ds.get("PatientID", "Unknown"))
-        p_name = p_name.replace('^', ' ').strip()
         patient_info = f"{p_name} ({p_id})"
-        
         img = ds.pixel_array.astype(float)
         img = (np.maximum(img, 0) / img.max()) * 255.0
         img = np.uint8(img)
@@ -171,14 +154,40 @@ def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
     detail_list = findings_db["Lung"] + findings_db["Pleura"] + findings_db["Heart"]
     details = " | ".join(detail_list).replace("**", "") if detail_list else "Không ghi nhận bất thường"
     
-    new_record = {"ID": img_id, "Time": datetime.now().strftime("%H:%M %d/%m/%Y"), 
-                  "Result": result, "Details": details, "Image_Path": file_name, "Patient_Info": patient_info}
+    # Tạo record với 2 slot Feedback trống
+    new_record = {
+        "ID": img_id, "Time": datetime.now().strftime("%H:%M %d/%m/%Y"), 
+        "Result": result, "Details": details, "Image_Path": file_name, 
+        "Patient_Info": patient_info, 
+        "Feedback_1": "Chưa đánh giá", # Slot 1
+        "Feedback_2": "Chưa đánh giá"  # Slot 2
+    }
     try:
         df = pd.read_csv(LOG_FILE)
         df = pd.concat([pd.DataFrame([new_record]), df], ignore_index=True)
         df.to_csv(LOG_FILE, index=False)
     except: pass
     return img_id
+
+# --- HÀM CẬP NHẬT FEEDBACK (QUAN TRỌNG) ---
+def update_feedback_slot(selected_id, feedback_value, slot):
+    """Cập nhật feedback vào slot 1 hoặc slot 2"""
+    try:
+        df = pd.read_csv(LOG_FILE)
+        # Ép kiểu column ID về string để so sánh chính xác
+        df['ID'] = df['ID'].astype(str)
+        selected_id = str(selected_id)
+        
+        if slot == 1:
+            df.loc[df["ID"] == selected_id, "Feedback_1"] = feedback_value
+        elif slot == 2:
+            df.loc[df["ID"] == selected_id, "Feedback_2"] = feedback_value
+            
+        df.to_csv(LOG_FILE, index=False)
+        return True
+    except Exception as e:
+        st.error(f"Lỗi lưu: {e}")
+        return False
 
 def process_image(image_file):
     if "ANATOMY" not in MODELS: return None, "Thiếu Anatomy", False, 0, "", ""
@@ -249,132 +258,47 @@ def process_image(image_file):
     img_id = save_case(display_img, findings_db, has_danger, patient_info)
     return display_img, findings_db, has_danger, time.time() - start_t, patient_info, img_id
 
-# ================= 6. TẠO HTML REPORT (FIX LỖI HIỂN THỊ) =================
+# ================= 6. TẠO HTML REPORT =================
 def generate_html_report(findings_db, has_danger, patient_info, img_id):
     current_time = datetime.now().strftime('%H:%M ngày %d/%m/%Y')
     
-    # 1. Nhu mô phổi
-    if not findings_db["Lung"]:
-        lung_html = """
-<ul style="margin-top:0px; padding-left:20px;">
-    <li>Hai trường phổi sáng đều.</li>
-    <li>Không ghi nhận đám mờ, nốt mờ, tổn thương thâm nhiễm hay đông đặc khu trú.</li>
-    <li>Vân mạch phổi phân bố đều từ rốn phổi ra ngoại vi, không ghi nhận vùng mất vân mạch bất thường.</li>
-</ul>"""
-    else:
-        lung_html = f"""
-<ul style="margin-top:0px; padding-left:20px; color:#c62828;">
-    <li><b>Ghi nhận bất thường:</b> {'; '.join(findings_db['Lung'])}</li>
-</ul>"""
+    lung_html = """<ul style="margin-top:0px; padding-left:20px;"><li>Hai trường phổi sáng đều.</li><li>Không ghi nhận đám mờ, nốt mờ, tổn thương thâm nhiễm hay đông đặc khu trú.</li><li>Vân mạch phổi phân bố đều từ rốn phổi ra ngoại vi, không ghi nhận vùng mất vân mạch bất thường.</li></ul>"""
+    if findings_db["Lung"]: lung_html = f'<ul style="margin-top:0px; padding-left:20px; color:#c62828;"><li><b>Ghi nhận bất thường:</b> {"; ".join(findings_db["Lung"])}</li></ul>'
 
-    # 2. Màng phổi
-    if not findings_db["Pleura"]:
-        pleura_html = """
-<ul style="margin-top:0px; padding-left:20px;">
-    <li>Góc sườn hoành hai bên nhọn, vòm hoành đều.</li>
-    <li>Không thấy hình ảnh tràn dịch màng phổi.</li>
-    <li>Không ghi nhận vùng tăng sáng ngoại vi hay đường màng phổi tạng gợi ý tràn khí màng phổi, kể cả vùng đỉnh phổi hai bên.</li>
-</ul>"""
-    else:
-        pleura_html = f"""
-<ul style="margin-top:0px; padding-left:20px; color:#c62828;">
-    <li><b>Phát hiện bất thường:</b> {'; '.join(findings_db['Pleura'])}</li>
-</ul>"""
+    pleura_html = """<ul style="margin-top:0px; padding-left:20px;"><li>Góc sườn hoành hai bên nhọn, vòm hoành đều.</li><li>Không thấy hình ảnh tràn dịch màng phổi.</li><li>Không ghi nhận vùng tăng sáng ngoại vi hay đường màng phổi tạng gợi ý tràn khí màng phổi, kể cả vùng đỉnh phổi hai bên.</li></ul>"""
+    if findings_db["Pleura"]: pleura_html = f'<ul style="margin-top:0px; padding-left:20px; color:#c62828;"><li><b>Phát hiện bất thường:</b> {"; ".join(findings_db["Pleura"])}</li></ul>'
 
-    # 3. Tim - Trung thất
-    if not findings_db["Heart"]:
-        heart_html = """
-<ul style="margin-top:0px; padding-left:20px;">
-    <li>Bóng tim không to (CTR < 0,5).</li>
-    <li>Trung thất cân đối, khí quản nằm giữa, không bị đẩy lệch.</li>
-</ul>"""
-    else:
-        heart_html = f"""
-<ul style="margin-top:0px; padding-left:20px; color:#e65100;">
-    <li><b>Tim mạch:</b> {'; '.join(findings_db['Heart'])}</li>
-</ul>"""
+    heart_html = """<ul style="margin-top:0px; padding-left:20px;"><li>Bóng tim không to (CTR < 0,5).</li><li>Trung thất cân đối, khí quản nằm giữa, không bị đẩy lệch.</li></ul>"""
+    if findings_db["Heart"]: heart_html = f'<ul style="margin-top:0px; padding-left:20px; color:#e65100;"><li><b>Tim mạch:</b> {"; ".join(findings_db["Heart"])}</li></ul>'
 
-    # 4. Xương
-    bone_html = """
-<ul style="margin-top:0px; padding-left:20px;">
-    <li>Khung xương lồng ngực cân đối. Không ghi nhận hình ảnh gãy xương sườn, xương đòn.</li>
-    <li>Không thấy dấu hiệu <b>khuyết xương</b>, <b>tiêu xương</b> hay tổn thương hủy xương khu trú.</li>
-    <li>Phần mềm thành ngực không ghi nhận bất thường.</li>
-</ul>"""
+    bone_html = """<ul style="margin-top:0px; padding-left:20px;"><li>Khung xương lồng ngực cân đối. Không ghi nhận hình ảnh gãy xương sườn, xương đòn.</li><li>Không thấy dấu hiệu <b>khuyết xương</b>, <b>tiêu xương</b> hay tổn thương hủy xương khu trú.</li><li>Phần mềm thành ngực không ghi nhận bất thường.</li></ul>"""
 
-    # KẾT LUẬN
     if has_danger or (len(findings_db["Lung"]) + len(findings_db["Pleura"]) > 0):
-        conclusion_html = """
-<div style='color:#c62828; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>
-    🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC
-</div>
-<div style="background:#fff3e0; padding:15px; border-left:5px solid #ff9800; font-size:15px;">
-    <strong>💡 Khuyến nghị:</strong><br>
-    – Đề nghị kết hợp lâm sàng và xét nghiệm cận lâm sàng.<br>
-    – Cân nhắc chụp CT ngực để đánh giá chi tiết bản chất tổn thương.
-</div>"""
+        conclusion_html = """<div style='color:#c62828; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC</div><div style="background:#fff3e0; padding:15px; border-left:5px solid #ff9800; font-size:15px;"><strong>💡 Khuyến nghị:</strong><br>– Đề nghị kết hợp lâm sàng và xét nghiệm cận lâm sàng.<br>– Cân nhắc chụp CT ngực để đánh giá chi tiết bản chất tổn thương.</div>"""
     else:
-        conclusion_html = """
-<div style='color:#2e7d32; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>
-    ✅ CHƯA GHI NHẬN BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC TẠI THỜI ĐIỂM KHẢO SÁT
-</div>
-<div style="color:#555; font-style:italic;">
-    <strong>💡 Khuyến nghị:</strong><br>
-    – Theo dõi lâm sàng.<br>
-    – Nếu có triệu chứng hô hấp hoặc đau ngực kéo dài, cân nhắc chụp lại phim hoặc phương tiện chẩn đoán hình ảnh khác (CT ngực).
-</div>"""
+        conclusion_html = """<div style='color:#2e7d32; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>✅ CHƯA GHI NHẬN BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC TẠI THỜI ĐIỂM KHẢO SÁT</div><div style="color:#555; font-style:italic;"><strong>💡 Khuyến nghị:</strong><br>– Theo dõi lâm sàng.<br>– Nếu có triệu chứng hô hấp hoặc đau ngực kéo dài, cân nhắc chụp lại phim hoặc phương tiện chẩn đoán hình ảnh khác (CT ngực).</div>"""
 
-    # --- HTML CHUẨN (KHÔNG THỤT DÒNG ĐỂ TRÁNH LỖI) ---
     html = f"""
 <div class="report-container">
-<div class="hospital-header">
-<h2>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h2>
-<p>(Hệ thống AI hỗ trợ phân tích X-quang ngực)</p>
-</div>
-<div style="margin-bottom: 20px; font-size: 15px;">
-<table class="info-table">
-<tr>
-<td style="width:60%;"><strong>Bệnh nhân:</strong> {patient_info}</td>
-<td style="text-align:right;"><strong>Thời gian:</strong> {current_time}</td>
-</tr>
-<tr>
-<td><strong>Mã hồ sơ:</strong> {img_id}</td>
-<td></td>
-</tr>
-</table>
-<div class="tech-box">
-<strong>⚙️ KỸ THUẬT:</strong><br>
-X-quang ngực thẳng (PA view), tư thế đúng, hít sâu tối đa.<br>
-Độ xuyên thấu và độ tương phản đạt yêu cầu đánh giá nhu mô phổi, trung thất và xương lồng ngực.
-</div>
-</div>
+<div class="hospital-header"><h2>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h2><p>(Hệ thống AI hỗ trợ phân tích X-quang ngực)</p></div>
+<div style="margin-bottom: 20px; font-size: 15px;"><table class="info-table"><tr><td style="width:60%;"><strong>Bệnh nhân:</strong> {patient_info}</td><td style="text-align:right;"><strong>Thời gian:</strong> {current_time}</td></tr><tr><td><strong>Mã hồ sơ:</strong> {img_id}</td><td></td></tr></table>
+<div class="tech-box"><strong>⚙️ KỸ THUẬT:</strong><br>X-quang ngực thẳng (PA view), tư thế đúng, hít sâu tối đa.<br>Độ xuyên thấu và độ tương phản đạt yêu cầu đánh giá nhu mô phổi, trung thất và xương lồng ngực.</div></div>
 <div class="section-header">I. MÔ TẢ HÌNH ẢNH</div>
-<p style="margin-bottom:5px;"><strong>1. Nhu mô phổi</strong></p>
-{lung_html}
-<p style="margin-bottom:5px;"><strong>2. Màng phổi</strong></p>
-{pleura_html}
-<p style="margin-bottom:5px;"><strong>3. Tim – Trung thất</strong></p>
-{heart_html}
-<p style="margin-bottom:5px;"><strong>4. Xương lồng ngực & phần mềm thành ngực</strong></p>
-{bone_html}
+<p style="margin-bottom:5px;"><strong>1. Nhu mô phổi</strong></p>{lung_html}
+<p style="margin-bottom:5px;"><strong>2. Màng phổi</strong></p>{pleura_html}
+<p style="margin-bottom:5px;"><strong>3. Tim – Trung thất</strong></p>{heart_html}
+<p style="margin-bottom:5px;"><strong>4. Xương lồng ngực & phần mềm thành ngực</strong></p>{bone_html}
 <div class="section-header" style="margin-top:25px;">II. KẾT LUẬN & KHUYẾN NGHỊ</div>
-<div style="padding:15px; border:1px dashed #ccc; margin-bottom:15px;">
-{conclusion_html}
-</div>
-<div style="margin-top: 50px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 13px; color: #666; text-align: center; font-style: italic;">
-__________________________________________________<br>
-Kết quả này do trí tuệ nhân tạo (AI) hỗ trợ thiết lập.<br>
-Chẩn đoán xác định thuộc về Bác sĩ chuyên khoa Chẩn đoán hình ảnh.
-</div>
-</div>
-"""
+<div style="padding:15px; border:1px dashed #ccc; margin-bottom:15px;">{conclusion_html}</div>
+<div style="margin-top: 50px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 13px; color: #666; text-align: center; font-style: italic;">__________________________________________________<br>Kết quả này do trí tuệ nhân tạo (AI) hỗ trợ thiết lập.<br>Chẩn đoán xác định thuộc về Bác sĩ chuyên khoa Chẩn đoán hình ảnh.</div>
+</div>"""
     return html
 
 # ================= 7. GIAO DIỆN CHÍNH =================
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3063/3063176.png", width=60)
     st.title("ĐIỀU KHIỂN")
-    mode = st.radio("Chọn chức năng:", ["🔍 Phân Tích Ca Bệnh", "📂 Lịch Sử & Review"])
+    mode = st.radio("Chọn chức năng:", ["🔍 Phân Tích Ca Bệnh", "📂 Hội Chẩn & Review"])
     st.divider()
     with st.expander("Trạng thái Model AI"):
         for s in MODEL_STATUS: st.caption(s)
@@ -395,29 +319,88 @@ if mode == "🔍 Phân Tích Ca Bệnh":
                     t1, t2 = st.tabs(["🖼️ Hình ảnh AI", "📄 Phiếu Kết Quả"])
                     with t1: st.image(img_out, caption=f"Vùng tổn thương (Processing: {p_time:.2f}s)", use_container_width=True)
                     with t2: st.markdown(generate_html_report(findings, danger, p_info, img_id), unsafe_allow_html=True)
-                    st.toast("✅ Đã lưu kết quả vào hồ sơ!", icon="💾")
-                else:
-                    st.error(findings)
+                    st.toast("✅ Đã lưu kết quả vào hồ sơ hội chẩn!", icon="💾")
+                else: st.error(findings)
 
-elif mode == "📂 Lịch Sử & Review":
-    st.title("📂 KHO DỮ LIỆU CA BỆNH")
+elif mode == "📂 Hội Chẩn & Review":
+    st.title("📂 KHO DỮ LIỆU & HỘI CHẨN")
+    
     if os.path.exists(LOG_FILE):
         try:
             df = pd.read_csv(LOG_FILE)
-            if "Patient_Info" not in df.columns:
-                df["Patient_Info"] = "N/A"
-                df.to_csv(LOG_FILE, index=False)
-                st.rerun()
-            df = df.iloc[::-1]
-            filter_opt = st.selectbox("Lọc kết quả:", ["Tất cả", "BẤT THƯỜNG", "BÌNH THƯỜNG"])
-            if filter_opt != "Tất cả": df = df[df["Result"] == filter_opt]
-            st.dataframe(df[["ID", "Patient_Info", "Result", "Details"]], use_container_width=True, hide_index=True)
-            selected_id = st.selectbox("Chọn Mã hồ sơ (ID) để xem lại:", df["ID"])
+            # Ensure ID is string
+            df['ID'] = df['ID'].astype(str)
+            df = df.iloc[::-1] # Mới nhất lên đầu
+            
+            # --- HIỂN THỊ DANH SÁCH 2 CỘT FEEDBACK ---
+            st.dataframe(
+                df[["ID", "Patient_Info", "Result", "Feedback_1", "Feedback_2", "Details"]], 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "Feedback_1": st.column_config.TextColumn("Đánh giá Lần 1"),
+                    "Feedback_2": st.column_config.TextColumn("Đánh giá Lần 2"),
+                }
+            )
+            
+            st.divider()
+            
+            # CHỌN CA ĐỂ HỘI CHẨN
+            id_list = df["ID"].unique()
+            selected_id = st.selectbox("👉 Chọn Mã hồ sơ (ID) để xem và đánh giá:", id_list)
+            
             if selected_id:
                 record = df[df["ID"] == selected_id].iloc[0]
-                img_path = os.path.join(IMAGES_DIR, record["Image_Path"])
-                if os.path.exists(img_path):
-                    st.image(img_path, caption=f"Hồ sơ: {record['Patient_Info']}", use_container_width=True)
-                    st.info(record['Details'])
-        except: st.error("Lỗi đọc dữ liệu.")
+                fb1 = record.get("Feedback_1", "Chưa đánh giá")
+                fb2 = record.get("Feedback_2", "Chưa đánh giá")
+                
+                col_img, col_act = st.columns([1, 1])
+                
+                with col_img:
+                    img_path = os.path.join(IMAGES_DIR, record["Image_Path"])
+                    if os.path.exists(img_path):
+                        st.image(img_path, caption=f"Hồ sơ: {selected_id}", use_container_width=True)
+                    else: st.error("Không tìm thấy ảnh gốc.")
+                
+                with col_act:
+                    st.info(f"**Bệnh nhân:** {record['Patient_Info']}")
+                    st.warning(f"**AI Kết luận:** {record['Result']}")
+                    st.write(f"**Chi tiết:** {record['Details']}")
+                    
+                    st.markdown("---")
+                    st.subheader("📝 Ghi nhận ý kiến chuyên môn")
+                    
+                    options = ["Chưa đánh giá", "✅ Đồng thuận (Đúng)", "❌ Sai (Dương tính giả)", "❌ Sai (Âm tính giả)"]
+                    
+                    # LOGIC HỘI CHẨN 2 BƯỚC
+                    if pd.isna(fb1) or fb1 == "Chưa đánh giá":
+                        # Chưa có ai đánh giá -> Mở Slot 1
+                        st.write("🔹 **Lần 1:** Chưa có đánh giá.")
+                        new_val = st.radio("Ý kiến của bạn (Lần 1):", options, index=0, key="fb1")
+                        if st.button("Lưu Đánh Giá Lần 1"):
+                            if new_val != "Chưa đánh giá":
+                                if update_feedback_slot(selected_id, new_val, 1):
+                                    st.success("Đã lưu đánh giá Lần 1!")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                    
+                    elif pd.isna(fb2) or fb2 == "Chưa đánh giá":
+                        # Đã có Slot 1 -> Mở Slot 2
+                        st.success(f"✅ **Lần 1:** {fb1}")
+                        st.write("🔹 **Lần 2:** Chưa có đánh giá.")
+                        new_val = st.radio("Ý kiến của bạn (Lần 2):", options, index=0, key="fb2")
+                        if st.button("Lưu Đánh Giá Lần 2 (Kết thúc hội chẩn)"):
+                            if new_val != "Chưa đánh giá":
+                                if update_feedback_slot(selected_id, new_val, 2):
+                                    st.success("Đã lưu đánh giá Lần 2!")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                    
+                    else:
+                        # Đã đủ 2 slot -> Khóa
+                        st.success(f"✅ **Lần 1:** {fb1}")
+                        st.success(f"✅ **Lần 2:** {fb2}")
+                        st.info("🔒 Hồ sơ đã đủ 2 lần hội chẩn. Không thể chỉnh sửa.")
+
+        except Exception as e: st.error(f"Lỗi đọc dữ liệu: {e}")
     else: st.info("Chưa có dữ liệu.")
