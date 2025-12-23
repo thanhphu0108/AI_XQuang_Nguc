@@ -16,7 +16,7 @@ import google.generativeai as genai
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital (V23.3 - Auto Model Switch)",
+    page_title="AI Hospital (V23.4 - Auto Discovery)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -32,7 +32,6 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 45px; }
     .gemini-box { background-color: #e3f2fd; padding: 15px; border-radius: 5px; border-left: 5px solid #1976d2; margin: 10px 0; }
     .info-table td { padding: 4px 2px; vertical-align: top; }
-    .success-badge { background-color: #4caf50; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -91,43 +90,59 @@ def load_models():
 
 MODELS, MODEL_STATUS, DEVICE = load_models()
 
-# --- HÀM GỌI GEMINI (THỬ NHIỀU MODEL ĐẾN KHI ĐƯỢC) ---
+# --- HÀM GỌI GEMINI THÔNG MINH (AUTO-DISCOVERY) ---
 def ask_gemini_for_label(api_key, image_path, clinical_info=""):
-    genai.configure(api_key=api_key)
-    
-    # Danh sách các tên model để thử lần lượt (ưu tiên mới nhất)
-    candidate_models = [
-        "gemini-1.5-flash",
-        "gemini-1.5-flash-001",
-        "gemini-1.5-pro",
-        "gemini-1.5-pro-001",
-        "gemini-pro-vision"  # Fallback cuối cùng (model cũ)
-    ]
-    
-    img = Image.open(image_path)
-    labels_str = ", ".join([f"'{l}'" for l in ALLOWED_LABELS])
-    prompt = f"Bạn là BS chẩn đoán hình ảnh. Lâm sàng: {clinical_info}. Xem ảnh X-quang và chẩn đoán theo danh sách: [{labels_str}]. Output JSON: {{'labels': [], 'reasoning': ''}}"
-    
-    last_error = ""
-    
-    # Vòng lặp thử từng model
-    for model_name in candidate_models:
+    try:
+        genai.configure(api_key=api_key)
+        img = Image.open(image_path)
+        labels_str = ", ".join([f"'{l}'" for l in ALLOWED_LABELS])
+        prompt = f"Bạn là BS chẩn đoán hình ảnh. Lâm sàng: {clinical_info}. Xem ảnh X-quang và chẩn đoán theo danh sách: [{labels_str}]. Output JSON: {{'labels': [], 'reasoning': ''}}"
+        
+        # 1. Thử danh sách chuẩn trước (Nhanh nhất)
+        priority_models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"]
+        
+        last_error = ""
+        for m_name in priority_models:
+            try:
+                model = genai.GenerativeModel(m_name)
+                response = model.generate_content([prompt, img], generation_config={"response_mime_type": "application/json"})
+                res_json = json.loads(response.text)
+                res_json["used_model"] = m_name
+                return res_json
+            except Exception as e:
+                last_error = str(e)
+                continue
+
+        # 2. Nếu thất bại, tự động dò tìm model khả dụng trong tài khoản
         try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(
-                [prompt, img], 
-                generation_config={"response_mime_type": "application/json"}
-            )
-            # Nếu thành công -> Trả về ngay kèm tên model đã dùng
-            result = json.loads(response.text)
-            result["used_model"] = model_name # Ghi chú lại model nào chạy được
-            return result
-        except Exception as e:
-            last_error = str(e)
-            continue # Thử model tiếp theo trong danh sách
+            available_models = []
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    available_models.append(m.name)
             
-    # Nếu thử hết mà vẫn lỗi
-    return {"labels": [], "reasoning": f"Tất cả Model đều thất bại. Lỗi cuối: {last_error}"}
+            # Thử model đầu tiên tìm thấy hỗ trợ vision (thường là cái mới nhất)
+            if available_models:
+                # Ưu tiên model có chữ 'flash' hoặc 'pro' hoặc 'vision'
+                best_model = available_models[0] 
+                for m in available_models:
+                    if 'flash' in m or 'pro' in m:
+                        best_model = m
+                        break
+                
+                model = genai.GenerativeModel(best_model)
+                response = model.generate_content([prompt, img], generation_config={"response_mime_type": "application/json"})
+                res_json = json.loads(response.text)
+                res_json["used_model"] = best_model
+                return res_json
+                
+            else:
+                return {"labels": [], "reasoning": f"Tài khoản Key này không có quyền truy cập model nào cả. (Error: {last_error})"}
+
+        except Exception as scan_error:
+             return {"labels": [], "reasoning": f"Không tìm thấy model phù hợp. Danh sách model khả dụng: {str(available_models) if 'available_models' in locals() else 'Không lấy được'}. Lỗi gốc: {last_error}"}
+
+    except Exception as e:
+        return {"labels": [], "reasoning": f"Lỗi nghiêm trọng: {str(e)}"}
 
 def read_dicom_image(file_buffer):
     try:
@@ -409,13 +424,12 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                 
                 if api_key:
                     if st.button("🧠 Xin ý kiến Gemini (Auto-Label)"):
-                        with st.spinner("Gemini đang phân tích..."):
+                        with st.spinner("Gemini đang phân tích (Đang thử nhiều model)..."):
                             res = ask_gemini_for_label(api_key, img_path, clinical_input)
                             gemini_labels = res.get("labels", [])
                             gemini_reason = res.get("reasoning", "")
-                            used_model = res.get("used_model", "Unknown")
+                            used_model = res.get("used_model", "Không rõ")
                             
-                            # HIỂN THỊ KẾT QUẢ
                             if gemini_labels:
                                 st.markdown(f'<div class="gemini-box"><b>🤖 Gemini Gợi ý (Model: {used_model}):</b> {", ".join(gemini_labels)}<br><i>"{gemini_reason}"</i></div>', unsafe_allow_html=True)
                             else:
