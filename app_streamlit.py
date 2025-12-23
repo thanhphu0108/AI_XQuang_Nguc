@@ -17,7 +17,7 @@ from openai import OpenAI
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital (V21.2 - Full Hybrid)",
+    page_title="AI Hospital (V21.3 - Stable)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -87,28 +87,20 @@ def encode_image_to_base64(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-# --- HÀM GỌI CHATGPT (CÓ NHẬP LÂM SÀNG) ---
+# --- HÀM GỌI CHATGPT ---
 def ask_gpt_for_label(api_key, image_path, clinical_info=""):
     try:
         client = OpenAI(api_key=api_key)
         base64_image = encode_image_to_base64(image_path)
         labels_str = ", ".join([f"'{l}'" for l in ALLOWED_LABELS])
-        
-        # Prompt kết hợp Thông tin lâm sàng + Ảnh
         prompt = f"""
         Vai trò: Bác sĩ chẩn đoán hình ảnh chuyên sâu.
-        Thông tin lâm sàng (nếu có): {clinical_info}
-        
-        Nhiệm vụ với ảnh X-quang này:
-        1. Phân tích hình ảnh, kết hợp thông tin lâm sàng để chẩn đoán.
-        2. CHỈ ĐƯỢC CHỌN nhãn từ danh sách chuẩn này: [{labels_str}].
+        Thông tin lâm sàng: {clinical_info}
+        Nhiệm vụ:
+        1. Phân tích X-quang.
+        2. CHỈ CHỌN nhãn từ danh sách: [{labels_str}].
         3. Nếu bình thường, chọn 'Bình thường (Normal)'.
-        
-        Yêu cầu Output JSON: 
-        {{ 
-            "labels": ["Tên bệnh 1", "Tên bệnh 2"], 
-            "reasoning": "Viết một đoạn biện luận chẩn đoán ngắn gọn, súc tích bằng tiếng Việt (như bác sĩ viết trong hồ sơ)." 
-        }}
+        Output JSON: {{ "labels": ["Tên bệnh 1", ...], "reasoning": "Biện luận ngắn gọn tiếng Việt." }}
         """
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -120,7 +112,7 @@ def ask_gpt_for_label(api_key, image_path, clinical_info=""):
             response_format={"type": "json_object"}
         )
         return json.loads(response.choices[0].message.content)
-    except Exception as e: return {"labels": [], "reasoning": f"Lỗi kết nối: {str(e)}"}
+    except Exception as e: return {"labels": [], "reasoning": f"Lỗi: {str(e)}"}
 
 def read_dicom_image(file_buffer):
     try:
@@ -178,6 +170,9 @@ def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
 def update_feedback_slot(selected_id, feedback_value, label_value, slot, gpt_reason=""):
     try:
         df = pd.read_csv(LOG_FILE)
+        # Fix lỗi NaN khi đọc
+        df = df.fillna("")
+        
         df['ID'] = df['ID'].astype(str)
         selected_id = str(selected_id)
         if slot == 1:
@@ -325,17 +320,16 @@ def generate_html_report(findings_db, has_danger, patient_info, img_id):
     if findings_db["Heart"]: heart_html = f'<ul style="margin-top:0px; padding-left:20px; color:#e65100;"><li><b>Tim mạch:</b> {"; ".join(findings_db["Heart"])}</li></ul>'
     bone_html = """<ul style="margin-top:0px; padding-left:20px;"><li>Khung xương lồng ngực cân đối...</li></ul>"""
     if has_danger or (len(findings_db["Lung"]) + len(findings_db["Pleura"]) > 0):
-        conclusion_html = """<div style='color:#c62828; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC</div><div style="background:#fff3e0; padding:15px; border-left:5px solid #ff9800; font-size:15px;"><strong>💡 Khuyến nghị:</strong><br>– Đề nghị kết hợp lâm sàng và xét nghiệm cận lâm sàng.<br>– Cân nhắc chụp CT ngực để đánh giá chi tiết bản chất tổn thương.</div>"""
+        conclusion_html = """<div style='color:#c62828; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG...</div>"""
     else:
-        conclusion_html = """<div style='color:#2e7d32; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>✅ CHƯA GHI NHẬN BẤT THƯỜNG TRÊN PHIM X-QUANG NGỰC TẠI THỜI ĐIỂM KHẢO SÁT</div><div style="color:#555; font-style:italic;"><strong>💡 Khuyến nghị:</strong><br>– Theo dõi lâm sàng.<br>– Nếu có triệu chứng hô hấp hoặc đau ngực kéo dài, cân nhắc chụp lại phim hoặc phương tiện chẩn đoán hình ảnh khác (CT ngực).</div>"""
-    html = f"""<div class="report-container"><div class="hospital-header"><h2>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h2><p>(Hệ thống AI hỗ trợ phân tích X-quang ngực)</p></div><div style="margin-bottom: 20px; font-size: 15px;"><table class="info-table"><tr><td style="width:60%;"><strong>Bệnh nhân:</strong> {patient_info}</td><td style="text-align:right;"><strong>Thời gian:</strong> {current_time}</td></tr><tr><td><strong>Mã hồ sơ:</strong> {img_id}</td><td></td></tr></table><div class="tech-box"><strong>⚙️ KỸ THUẬT:</strong><br>X-quang ngực thẳng (PA view), tư thế đúng, hít sâu tối đa.<br>Độ xuyên thấu và độ tương phản đạt yêu cầu đánh giá nhu mô phổi, trung thất và xương lồng ngực.</div></div><div class="section-header">I. MÔ TẢ HÌNH ẢNH</div><p style="margin-bottom:5px;"><strong>1. Nhu mô phổi</strong></p>{lung_html}<p style="margin-bottom:5px;"><strong>2. Màng phổi</strong></p>{pleura_html}<p style="margin-bottom:5px;"><strong>3. Tim – Trung thất</strong></p>{heart_html}<p style="margin-bottom:5px;"><strong>4. Xương lồng ngực & phần mềm thành ngực</strong></p>{bone_html}<div class="section-header" style="margin-top:25px;">II. KẾT LUẬN & KHUYẾN NGHỊ</div><div style="padding:15px; border:1px dashed #ccc; margin-bottom:15px;">{conclusion_html}</div><div style="margin-top: 50px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 13px; color: #666; text-align: center; font-style: italic;">__________________________________________________<br>Kết quả này do trí tuệ nhân tạo (AI) hỗ trợ thiết lập.<br>Chẩn đoán xác định thuộc về Bác sĩ chuyên khoa Chẩn đoán hình ảnh.</div></div>"""
+        conclusion_html = """<div style='color:#2e7d32; font-weight:bold; font-size:16px; margin-bottom:10px; text-transform: uppercase;'>✅ CHƯA GHI NHẬN BẤT THƯỜNG...</div>"""
+    html = f"""<div class="report-container"><div class="hospital-header"><h2>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h2><p>(Hệ thống AI hỗ trợ phân tích X-quang ngực)</p></div><div style="margin-bottom: 20px; font-size: 15px;"><table class="info-table"><tr><td style="width:60%;"><strong>Bệnh nhân:</strong> {patient_info}</td><td style="text-align:right;"><strong>Thời gian:</strong> {current_time}</td></tr><tr><td><strong>Mã hồ sơ:</strong> {img_id}</td><td></td></tr></table><div class="tech-box"><strong>⚙️ KỸ THUẬT:</strong><br>X-quang ngực thẳng (PA view), tư thế đúng, hít sâu tối đa.</div></div><div class="section-header">I. MÔ TẢ HÌNH ẢNH</div><p style="margin-bottom:5px;"><strong>1. Nhu mô phổi</strong></p>{lung_html}<p style="margin-bottom:5px;"><strong>2. Màng phổi</strong></p>{pleura_html}<p style="margin-bottom:5px;"><strong>3. Tim – Trung thất</strong></p>{heart_html}<p style="margin-bottom:5px;"><strong>4. Xương</strong></p>{bone_html}<div class="section-header" style="margin-top:25px;">II. KẾT LUẬN</div><div style="padding:15px; border:1px dashed #ccc; margin-bottom:15px;">{conclusion_html}</div></div>"""
     return html
 
 # ================= 7. GIAO DIỆN CHÍNH =================
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3063/3063176.png", width=60)
     st.title("ĐIỀU KHIỂN")
-    
     api_key = st.text_input("🔑 OpenAI API Key:", type="password", help="Nhập Key để dùng tính năng AI Teacher")
     mode = st.radio("Chức năng:", ["🔍 Phân Tích Ca Bệnh", "📂 Hội Chẩn (AI Teacher)", "🛠️ Xuất Dataset"])
     st.divider()
@@ -352,19 +346,22 @@ if mode == "🔍 Phân Tích Ca Bệnh":
             analyze = st.button("🚀 PHÂN TÍCH NGAY", type="primary")
     with col2:
         if uploaded_file and analyze:
-            with st.spinner("🤖 Đang phân tích theo cấu trúc giải phẫu..."):
+            with st.spinner("🤖 Đang phân tích..."):
                 img_out, findings, danger, p_time, p_info, img_id = process_image(uploaded_file)
                 if img_out is not None:
                     t1, t2 = st.tabs(["🖼️ Hình ảnh AI", "📄 Phiếu Kết Quả"])
-                    with t1: st.image(img_out, caption=f"Vùng tổn thương (Processing: {p_time:.2f}s)", use_container_width=True)
+                    with t1: st.image(img_out, caption=f"Processing: {p_time:.2f}s", use_container_width=True)
                     with t2: st.markdown(generate_html_report(findings, danger, p_info, img_id), unsafe_allow_html=True)
-                    st.toast("✅ Đã lưu kết quả vào hồ sơ!", icon="💾")
+                    st.toast("✅ Đã lưu kết quả!", icon="💾")
                 else: st.error(findings)
 
 elif mode == "📂 Hội Chẩn (AI Teacher)":
     st.title("📂 HỘI CHẨN & AI GÁN NHÃN")
     if os.path.exists(LOG_FILE):
         df = pd.read_csv(LOG_FILE)
+        # SỬA LỖI NAN: Đảm bảo không có ô trống gây crash
+        df = df.fillna("")
+        
         df['ID'] = df['ID'].astype(str)
         df = df.iloc[::-1]
         id_list = df["ID"].unique()
@@ -380,10 +377,8 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                 st.warning(f"AI Kết luận: {record['Result']}")
                 st.markdown("---")
                 
-                # KHU VỰC CHATGPT
+                # GPT SECTION
                 gpt_labels, gpt_reason = [], ""
-                
-                # --- Ô NHẬP LÂM SÀNG MỚI ---
                 clinical_input = st.text_input("💬 Thông tin lâm sàng (Gửi kèm cho AI):", placeholder="Ví dụ: Ho ra máu, sốt về chiều...")
                 
                 if api_key:
@@ -397,14 +392,17 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                             else: st.error("ChatGPT không trả về nhãn.")
                 else: st.warning("⚠️ Nhập API Key bên trái để dùng ChatGPT.")
 
-                # FORM ĐÁNH GIÁ
-                fb1 = record.get("Feedback_1", "Chưa đánh giá")
-                lb1 = record.get("Label_1", "")
-                default_labels = gpt_labels if gpt_labels else (lb1.split("; ") if lb1 else [])
+                # MANUAL LABELING SECTION (Đã sửa lỗi crash)
+                fb1 = str(record.get("Feedback_1", "Chưa đánh giá"))
+                lb1 = str(record.get("Label_1", ""))
+                
+                default_labels = gpt_labels if gpt_labels else ([l for l in lb1.split("; ") if l])
                 valid_defaults = [l for l in default_labels if l in ALLOWED_LABELS]
                 
                 st.write("### 📝 Kết luận chuyên môn:")
                 new_fb = st.radio("Đánh giá:", ["Chưa đánh giá", "✅ Đồng thuận", "❌ Sai (Sửa lại)"], index=0 if fb1 == "Chưa đánh giá" else (1 if "Đồng thuận" in fb1 else 2))
+                
+                # Widget cho người dùng tự sửa nhãn
                 final_labels = st.multiselect("Bệnh lý xác định:", ALLOWED_LABELS, default=valid_defaults)
                 
                 if st.button("💾 LƯU KẾT QUẢ (TRAINING DATA)"):
@@ -419,6 +417,8 @@ elif mode == "🛠️ Xuất Dataset":
             st.success("✅ Đã mở khóa Developer Mode!")
             if os.path.exists(LOG_FILE):
                 df = pd.read_csv(LOG_FILE)
+                # SỬA LỖI NAN KHI XUẤT
+                df = df.fillna("")
                 df["Final_Label"] = df.apply(get_final_label, axis=1)
                 df["Select"] = False
                 st.write("### 📋 Chọn ca để xuất dữ liệu:")
