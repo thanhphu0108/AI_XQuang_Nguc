@@ -12,10 +12,12 @@ import pydicom
 import shutil
 import hashlib
 import random
+import base64
+from openai import OpenAI # Thư viện OpenAI mới
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital (Dataset Intelligence)",
+    page_title="AI Hospital (Hybrid Intelligence)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -30,6 +32,9 @@ st.markdown("""
     .section-header { background-color: #eee; padding: 8px; border-left: 5px solid #002f6c; margin: 20px 0 15px 0; font-weight: bold; color: #002f6c; text-transform: uppercase; }
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 45px; }
     .info-table td { padding: 4px 2px; vertical-align: top; }
+    /* Chat Box Style */
+    .chat-box { background-color: #e3f2fd; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #2196f3; }
+    .gpt-reply { background-color: #f1f8e9; padding: 15px; border-radius: 10px; margin-top: 10px; border-left: 5px solid #4caf50; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -39,9 +44,19 @@ MODELS_DIR = os.path.join(BASE_PATH, "models")
 HISTORY_DIR = os.path.join(BASE_PATH, "history")
 IMAGES_DIR = os.path.join(HISTORY_DIR, "images")
 LOG_FILE = os.path.join(HISTORY_DIR, "log_book.csv")
+CHAT_LOG_FILE = os.path.join(HISTORY_DIR, "chatgpt_log.csv") # File log riêng cho ChatGPT
 TRAIN_DATA_DIR = os.path.join(BASE_PATH, "dataset_yolo_ready")
 
 os.makedirs(IMAGES_DIR, exist_ok=True)
+
+# Khởi tạo CSV chính
+if not os.path.exists(LOG_FILE):
+    pd.DataFrame(columns=["ID", "Time", "Result", "Image_Path", "Patient_Info", 
+                          "Feedback_1", "Label_1", "Feedback_2", "Label_2"]).to_csv(LOG_FILE, index=False)
+
+# Khởi tạo CSV ChatGPT
+if not os.path.exists(CHAT_LOG_FILE):
+    pd.DataFrame(columns=["Time", "Prompt", "Response", "Image_Path"]).to_csv(CHAT_LOG_FILE, index=False)
 
 LABEL_MAP = {
     "Bình thường (Normal)": "Normal",
@@ -55,10 +70,6 @@ LABEL_MAP = {
     "Dày dính màng phổi (Pleural Thickening)": "Pleural_Thickening",
     "Khác / Tạp âm (Other)": "Other"
 }
-
-if not os.path.exists(LOG_FILE):
-    pd.DataFrame(columns=["ID", "Time", "Result", "Image_Path", "Patient_Info", 
-                          "Feedback_1", "Label_1", "Feedback_2", "Label_2"]).to_csv(LOG_FILE, index=False)
 
 DOCTOR_ROSTER = {
     "ANATOMY": "Dr_Anatomy.pt",      
@@ -87,6 +98,49 @@ def load_models():
 
 MODELS, MODEL_STATUS, DEVICE = load_models()
 
+def encode_image_to_base64(image_path):
+    """Chuyển ảnh sang Base64 để gửi cho ChatGPT"""
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+def chat_with_gpt(api_key, prompt, image_path):
+    """Gửi ảnh và text lên ChatGPT"""
+    try:
+        client = OpenAI(api_key=api_key)
+        base64_image = encode_image_to_base64(image_path)
+        
+        response = client.chat.completions.create(
+            model="gpt-4o", # Sử dụng model mới nhất hỗ trợ Vision
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    ],
+                }
+            ],
+            max_tokens=500
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Lỗi kết nối OpenAI: {str(e)}"
+
+def save_chat_log(prompt, response, image_path):
+    """Lưu lịch sử chat"""
+    new_record = {
+        "Time": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "Prompt": prompt,
+        "Response": response,
+        "Image_Path": os.path.basename(image_path)
+    }
+    try:
+        df = pd.read_csv(CHAT_LOG_FILE)
+        df = pd.concat([pd.DataFrame([new_record]), df], ignore_index=True)
+        df.to_csv(CHAT_LOG_FILE, index=False)
+    except: pass
+
+# ... (Các hàm cũ giữ nguyên: read_dicom_image, get_finding_text, save_case, v.v...)
 def read_dicom_image(file_buffer):
     try:
         ds = pydicom.dcmread(file_buffer)
@@ -158,14 +212,9 @@ def update_feedback_slot(selected_id, feedback_value, label_value, slot):
         return True
     except: return False
 
-# --- HÀM TÍNH TOÁN NHÃN CHỐT (PRIORITY LOGIC) ---
 def get_final_label(row):
-    # Ưu tiên Label 2 nếu có
-    if pd.notna(row["Label_2"]) and row["Label_2"] != "" and row["Feedback_2"] != "Chưa đánh giá":
-        return row["Label_2"]
-    # Nếu không, lấy Label 1
-    elif pd.notna(row["Label_1"]) and row["Label_1"] != "" and row["Feedback_1"] != "Chưa đánh giá":
-        return row["Label_1"]
+    if pd.notna(row["Label_2"]) and row["Label_2"] != "" and row["Feedback_2"] != "Chưa đánh giá": return row["Label_2"]
+    elif pd.notna(row["Label_1"]) and row["Label_1"] != "" and row["Feedback_1"] != "Chưa đánh giá": return row["Label_1"]
     return ""
 
 def preview_auto_label(df_selected):
@@ -173,10 +222,8 @@ def preview_auto_label(df_selected):
     random_row = df_selected.sample(1).iloc[0]
     img_path = os.path.join(IMAGES_DIR, random_row["Image_Path"])
     if not os.path.exists(img_path): return None, "Không tìm thấy file ảnh gốc!"
-    
     img = cv2.imread(img_path)
     anatomy_model = MODELS.get("ANATOMY")
-    
     detected_classes = [] 
     if anatomy_model:
         results = anatomy_model(img, verbose=False)[0]
@@ -187,10 +234,7 @@ def preview_auto_label(df_selected):
             detected_classes.append(label_name)
             cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(img, f"{label_name}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    
-    # Lấy nhãn chốt để hiển thị
     final_label = get_final_label(random_row)
-    
     msg = f"""
     🖼️ **File:** {random_row['Image_Path']}
     🏆 **Nhãn chốt (Final Label):** {final_label if final_label else '⚠️ Chưa gán nhãn'}
@@ -198,55 +242,34 @@ def preview_auto_label(df_selected):
     """
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB), msg
 
-# --- HÀM XUẤT DATASET (OPTIMIZED) ---
 def export_selected_data(df_selected, use_anatomy_auto_label=True):
     count = 0
     if os.path.exists(TRAIN_DATA_DIR): shutil.rmtree(TRAIN_DATA_DIR)
-    
     os.makedirs(os.path.join(TRAIN_DATA_DIR, "images"), exist_ok=True)
     os.makedirs(os.path.join(TRAIN_DATA_DIR, "labels"), exist_ok=True)
-    
-    # Tạo cấu trúc thư mục phân loại (nếu muốn dùng yolo classify)
     for en_label in LABEL_MAP.values():
         os.makedirs(os.path.join(TRAIN_DATA_DIR, "classified", en_label), exist_ok=True)
-    
     anatomy_model = MODELS.get("ANATOMY")
-    
-    # Tạo file classes.txt
     if anatomy_model:
         with open(os.path.join(TRAIN_DATA_DIR, "classes.txt"), "w") as f:
             for idx, name in anatomy_model.names.items(): f.write(f"{name}\n")
-    
     progress_bar = st.progress(0)
     total = len(df_selected)
-    
     for idx, (index, row) in enumerate(df_selected.iterrows()):
-        # ÁP DỤNG LOGIC CHỐT: Lấy Lần 2 -> Lần 1
         labels_str = get_final_label(row)
-        
         img_src = os.path.join(IMAGES_DIR, row["Image_Path"])
-        
         if os.path.exists(img_src) and labels_str:
-            # Xử lý Đa nhãn (Multi-label split by ;)
             label_list = labels_str.split(";")
-            
-            # 1. Copy vào thư mục phân loại (Classified Folders)
             for lbl_vn in label_list:
                 folder_name = LABEL_MAP.get(lbl_vn.strip())
                 if folder_name:
                     dst_class = os.path.join(TRAIN_DATA_DIR, "classified", folder_name, row["Image_Path"])
                     shutil.copy(img_src, dst_class)
-
-            # 2. Chuẩn bị cho Detection (YOLO Format)
-            # Lấy tên bệnh chính (cái đầu tiên) làm prefix
             primary_disease = label_list[0].strip()
             folder_prefix = LABEL_MAP.get(primary_disease, "Unknown")
             new_filename = f"{folder_prefix}_{row['Image_Path']}"
-            
             dst_img = os.path.join(TRAIN_DATA_DIR, "images", new_filename)
             shutil.copy(img_src, dst_img)
-            
-            # Auto-Label Anatomy
             if use_anatomy_auto_label and anatomy_model:
                 try:
                     results = anatomy_model(img_src, verbose=False)[0]
@@ -255,13 +278,11 @@ def export_selected_data(df_selected, use_anatomy_auto_label=True):
                         cls_id = int(box.cls[0])
                         x, y, w, h = box.xywhn[0].tolist()
                         txt_content += f"{cls_id} {x:.6f} {y:.6f} {w:.6f} {h:.6f}\n"
-                    
                     dst_txt = os.path.join(TRAIN_DATA_DIR, "labels", new_filename.replace(".jpg", ".txt").replace(".png", ".txt"))
                     with open(dst_txt, "w") as f: f.write(txt_content)
                 except: pass
             count += 1
         progress_bar.progress((idx + 1) / total)
-            
     shutil.make_archive(TRAIN_DATA_DIR, 'zip', TRAIN_DATA_DIR)
     return f"Đã xuất {count} ảnh (Ưu tiên nhãn Lần 2)!", f"{TRAIN_DATA_DIR}.zip"
 
@@ -342,7 +363,7 @@ def generate_html_report(findings_db, has_danger, patient_info, img_id):
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3063/3063176.png", width=60)
     st.title("ĐIỀU KHIỂN")
-    mode = st.radio("Chức năng:", ["🔍 Phân Tích Ca Bệnh", "📂 Hội Chẩn (Gán Nhãn)", "🛠️ Tạo Dataset Train"])
+    mode = st.radio("Chức năng:", ["🔍 Phân Tích Ca Bệnh", "🤖 Tham vấn ChatGPT", "📂 Hội Chẩn (Gán Nhãn)", "🛠️ Tạo Dataset Train"])
     st.divider()
 
 if mode == "🔍 Phân Tích Ca Bệnh":
@@ -364,6 +385,44 @@ if mode == "🔍 Phân Tích Ca Bệnh":
                     st.toast("✅ Đã lưu kết quả!", icon="💾")
                 else: st.error(findings)
 
+elif mode == "🤖 Tham vấn ChatGPT":
+    st.title("🤖 BÁC SĨ AI (GPT-4o Vision)")
+    st.markdown("---")
+    
+    with st.expander("🔑 Cấu hình API Key (Bắt buộc)", expanded=True):
+        api_key = st.text_input("Nhập OpenAI API Key của bạn:", type="password")
+        
+    col_gpt_1, col_gpt_2 = st.columns([1, 1.5])
+    
+    with col_gpt_1:
+        gpt_img_file = st.file_uploader("Tải ảnh X-quang cần hỏi:", type=["jpg", "png", "jpeg"])
+        if gpt_img_file:
+            st.image(gpt_img_file, caption="Ảnh tải lên", use_container_width=True)
+            
+            # Lưu ảnh tạm để xử lý
+            temp_path = os.path.join(IMAGES_DIR, f"GPT_{gpt_img_file.name}")
+            with open(temp_path, "wb") as f:
+                f.write(gpt_img_file.getbuffer())
+    
+    with col_gpt_2:
+        user_prompt = st.text_area("💬 Nhập câu hỏi cho AI:", value="Hãy mô tả chi tiết các tổn thương trên phim X-quang này và gợi ý chẩn đoán phân biệt.", height=150)
+        
+        if st.button("🚀 Gửi cho ChatGPT", type="primary"):
+            if not api_key:
+                st.warning("⚠️ Vui lòng nhập API Key!")
+            elif not gpt_img_file:
+                st.warning("⚠️ Vui lòng tải ảnh lên!")
+            else:
+                with st.spinner("🤖 ChatGPT đang suy nghĩ... (Có thể mất 10-20s)"):
+                    response_text = chat_with_gpt(api_key, user_prompt, temp_path)
+                    
+                    st.markdown(f'<div class="chat-box"><b>🧑‍⚕️ Bạn:</b><br>{user_prompt}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="gpt-reply"><b>🤖 ChatGPT:</b><br>{response_text}</div>', unsafe_allow_html=True)
+                    
+                    # Lưu log
+                    save_chat_log(user_prompt, response_text, temp_path)
+                    st.success("✅ Đã lưu nội dung hội thoại vào Database!")
+
 elif mode == "📂 Hội Chẩn (Gán Nhãn)":
     st.title("📂 KHO DỮ LIỆU & GÁN NHÃN LẠI")
     if os.path.exists(LOG_FILE):
@@ -379,7 +438,9 @@ elif mode == "📂 Hội Chẩn (Gán Nhãn)":
             col_img, col_act = st.columns([1, 1])
             with col_img:
                 img_path = os.path.join(IMAGES_DIR, record["Image_Path"])
-                if os.path.exists(img_path): st.image(img_path, caption=f"Hồ sơ: {selected_id}", use_container_width=True)
+                if os.path.exists(img_path): 
+                    vis_img, parts = visualize_anatomy(img_path) if MODELS.get("ANATOMY") else (None, [])
+                    st.image(vis_img if vis_img is not None else img_path, caption=f"Anatomy: {', '.join(parts)}", use_container_width=True)
             with col_act:
                 st.info(f"**BN:** {record['Patient_Info']} | **AI:** {record['Result']}")
                 st.markdown("---")
@@ -415,32 +476,19 @@ elif mode == "🛠️ Tạo Dataset Train":
             st.success("✅ Đã mở khóa Developer Mode!")
             if os.path.exists(LOG_FILE):
                 df = pd.read_csv(LOG_FILE)
-                # TÍNH TOÁN CỘT "NHÃN CUỐI CÙNG" ĐỂ HIỂN THỊ
                 df["Final_Label"] = df.apply(get_final_label, axis=1)
-                
                 df["Select"] = False
                 st.write("### 📋 Chọn ca để xuất dữ liệu:")
-                
-                # Highlight dòng mâu thuẫn (Lần 1 != Lần 2)
-                st.info("💡 Lưu ý: Cột 'Final_Label' sẽ ưu tiên lấy đánh giá Lần 2 (nếu có).")
-                
-                df_editor = st.data_editor(
-                    df[["Select", "ID", "Patient_Info", "Label_1", "Label_2", "Final_Label"]],
-                    column_config={"Select": st.column_config.CheckboxColumn("Chọn", default=False)},
-                    hide_index=True, use_container_width=True
-                )
+                df_editor = st.data_editor(df[["Select", "ID", "Patient_Info", "Label_1", "Label_2", "Final_Label"]], column_config={"Select": st.column_config.CheckboxColumn("Chọn", default=False)}, hide_index=True, use_container_width=True)
                 selected_rows = df_editor[df_editor["Select"] == True]
                 df_final = df.iloc[selected_rows.index]
                 st.write(f"Đang chọn: **{len(df_final)}** ca.")
-                
                 c1, c2, c3 = st.columns(3)
                 auto_label = c1.checkbox("🤖 Auto-Label Anatomy", value=True)
-                
                 if c2.button("👁️ Xem thử"):
                     prev_img, prev_msg = preview_auto_label(df_final)
                     if prev_img is not None: st.image(prev_img, caption=prev_msg, width=500)
                     else: st.warning(prev_msg)
-                
                 if c3.button("🚀 XUẤT DATASET"):
                     if not df_final.empty:
                         with st.spinner("Đang xử lý..."):
