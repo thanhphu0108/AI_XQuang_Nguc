@@ -14,7 +14,7 @@ import google.generativeai as genai
 from supabase import create_client, Client
 
 # ================= 1. CẤU HÌNH =================
-st.set_page_config(page_title="AI Hospital (V28.3 - Fixed)", page_icon="💎", layout="wide")
+st.set_page_config(page_title="AI Hospital (V29.0 - Universal Test)", page_icon="🌐", layout="wide")
 
 st.markdown("""
 <style>
@@ -72,12 +72,15 @@ MODELS, MODEL_STATUS, DEVICE = load_models()
 # --- SUPABASE FUNCTIONS ---
 def upload_image(img_cv, filename):
     try:
+        # Encode JPG
         _, buffer = cv2.imencode('.jpg', cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR))
         bucket = "xray_images"
+        # Upload
         supabase.storage.from_(bucket).upload(filename, buffer.tobytes(), {"content-type": "image/jpeg", "upsert": "true"})
+        # Get URL
         return supabase.storage.from_(bucket).get_public_url(filename)
     except Exception as e:
-        # Fallback: Lấy URL nếu file đã tồn tại
+        # Fallback lấy URL nếu lỗi upload (do file tồn tại)
         try: return supabase.storage.from_("xray_images").get_public_url(filename)
         except: return None
 
@@ -124,7 +127,7 @@ def ask_gemini(api_key, image, context, note, guide, tags):
                 res["sent_prompt"] = prompt
                 return res
             except: continue
-        return {"labels": [], "reasoning": "Lỗi Gemini: Không phản hồi.", "sent_prompt": prompt}
+        return {"labels": [], "reasoning": "Lỗi Gemini.", "sent_prompt": prompt}
     except Exception as e: return {"labels": [], "reasoning": str(e), "sent_prompt": ""}
 
 def read_dicom_image(file_buffer):
@@ -141,80 +144,74 @@ def read_dicom_image(file_buffer):
         return img_rgb, f"{p_name} ({p_id})"
     except: return None, "Lỗi DICOM"
 
-# --- PROCESS & SAVE (FIXED) ---
+# --- PROCESS & SAVE (UNIVERSAL MODE) ---
 def process_and_save(image_file):
-    if "ANATOMY" not in MODELS: 
-        return None, {"Error": "Chưa tải được Model AI (Anatomy)"}, False, None
-    
     start_t = time.time()
     filename = image_file.name.lower()
     img_rgb, patient_info = None, "Ẩn danh"
     
-    # 1. Reset con trỏ file (Fix lỗi đọc file rỗng)
+    # 1. Reset file
     image_file.seek(0)
     
+    # 2. Đọc ảnh (Hỗ trợ mọi loại)
     if filename.endswith(('.dcm', '.dicom')):
         img_rgb, p_info = read_dicom_image(image_file)
-        if img_rgb is None: 
-            return None, {"Error": f"Lỗi đọc DICOM: {p_info}"}, False, None
+        if img_rgb is None: return None, {"Error": f"Lỗi DICOM: {p_info}"}, False, None
         patient_info = p_info
     else:
-        # Đọc ảnh thường
         file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
-        if file_bytes.size == 0:
-            return None, {"Error": "File ảnh rỗng!"}, False, None
-            
         img_cv = cv2.imdecode(file_bytes, 1)
-        if img_cv is None:
-            return None, {"Error": "OpenCV không đọc được ảnh này (Corrupted/Unsupported)"}, False, None
-            
+        if img_cv is None: return None, {"Error": "Không đọc được ảnh"}, False, None
         img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
     
-    # Resize
+    # Resize chuẩn
     h, w = img_rgb.shape[:2]
     scale = 1280 / max(h, w)
     img_resized = cv2.resize(img_rgb, (int(w*scale), int(h*scale)))
     display_img = img_resized.copy()
     
-    # YOLO Logic
     findings_db = {"Lung": [], "Pleura": [], "Heart": []}
     has_danger = False
-    img_bgr = cv2.cvtColor(img_resized, cv2.COLOR_RGB2BGR)
     
-    try:
-        anatomy_res = MODELS["ANATOMY"](img_bgr, conf=0.35, verbose=False)[0]
-        for box in anatomy_res.boxes:
-            coords = box.xyxy[0].cpu().numpy().astype(int)
-            cls_id = int(box.cls[0])
-            region = anatomy_res.names[cls_id]
-            x1, y1, x2, y2 = coords
-            
-            roi = img_bgr[max(0, y1-40):min(h, y2+40), max(0, x1-40):min(w, x2+40)]
-            if roi.size == 0: continue
-            
-            target_models = []
-            if "Lung" in region: target_models = ["PNEUMOTHORAX", "EFFUSION", "PNEUMONIA", "TUMOR"]
-            elif "Heart" in region: target_models = ["HEART"]
-            
-            for spec in target_models:
-                if spec in MODELS:
-                    res = MODELS[spec](roi, verbose=False)[0]
-                    if res.probs.top1conf.item() > 0.6 and res.names[res.probs.top1] == "Disease":
-                        pct = res.probs.top1conf.item() * 100
-                        if pct > 75: has_danger = True
-                        text = f"{region}: {spec} ({pct:.0f}%)"
-                        
-                        if "HEART" in spec: findings_db["Heart"].append(text)
-                        elif "PLEURA" in spec or "EFFUSION" in spec: findings_db["Pleura"].append(text)
-                        else: findings_db["Lung"].append(text)
-                        
-                        color = (255, 0, 0) if pct > 75 else (0, 165, 255)
-                        cv2.rectangle(display_img, (x1, y1), (x2, y2), color, 2)
-                        cv2.putText(display_img, spec[:4], (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    except Exception as e:
-        return None, {"Error": f"Lỗi khi chạy Model YOLO: {str(e)}"}, False, None
+    # 3. Chạy YOLO (Nếu có Model)
+    if "ANATOMY" in MODELS:
+        try:
+            img_bgr = cv2.cvtColor(img_resized, cv2.COLOR_RGB2BGR)
+            anatomy_res = MODELS["ANATOMY"](img_bgr, conf=0.35, verbose=False)[0]
+            for box in anatomy_res.boxes:
+                coords = box.xyxy[0].cpu().numpy().astype(int)
+                cls_id = int(box.cls[0])
+                region = anatomy_res.names[cls_id]
+                x1, y1, x2, y2 = coords
+                
+                roi = img_bgr[max(0, y1-40):min(h, y2+40), max(0, x1-40):min(w, x2+40)]
+                if roi.size == 0: continue
+                
+                target_models = []
+                if "Lung" in region: target_models = ["PNEUMOTHORAX", "EFFUSION", "PNEUMONIA", "TUMOR"]
+                elif "Heart" in region: target_models = ["HEART"]
+                
+                for spec in target_models:
+                    if spec in MODELS:
+                        res = MODELS[spec](roi, verbose=False)[0]
+                        if res.probs.top1conf.item() > 0.6 and res.names[res.probs.top1] == "Disease":
+                            pct = res.probs.top1conf.item() * 100
+                            if pct > 75: has_danger = True
+                            text = f"{region}: {spec} ({pct:.0f}%)"
+                            
+                            if "HEART" in spec: findings_db["Heart"].append(text)
+                            elif "PLEURA" in spec or "EFFUSION" in spec: findings_db["Pleura"].append(text)
+                            else: findings_db["Lung"].append(text)
+                            
+                            color = (255, 0, 0) if pct > 75 else (0, 165, 255)
+                            cv2.rectangle(display_img, (x1, y1), (x2, y2), color, 2)
+                            cv2.putText(display_img, spec[:4], (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        except: pass # Bỏ qua lỗi AI để vẫn upload được
+    else:
+        # Chế độ Mockup (Không có AI)
+        findings_db["Lung"].append("Chế độ Test (Không có Model AI)")
 
-    # UPLOAD & SAVE
+    # 4. UPLOAD & SAVE (Luôn thực hiện)
     img_id = datetime.now().strftime("%d%m%Y%H%M%S")
     file_name = f"XRAY_{img_id}.jpg"
     img_url = upload_image(display_img, file_name)
@@ -232,8 +229,7 @@ def process_and_save(image_file):
         }
         save_log(data)
     else:
-        # Nếu không upload được ảnh thì vẫn trả về để xem, nhưng báo lỗi
-        return display_img, {"Error": "Không upload được ảnh lên Supabase (Kiểm tra lại Bucket Name hoặc Key)"}, has_danger, img_id
+        return display_img, {"Error": "Lỗi Upload Supabase (Check Bucket/Key)"}, has_danger, img_id
         
     return display_img, findings_db, has_danger, img_id
 
@@ -248,27 +244,24 @@ if mode == "🔍 Upload & Phân Tích":
     st.title("🏥 AI CHẨN ĐOÁN (SUPABASE CLOUD)")
     col1, col2 = st.columns([1, 1.5])
     with col1:
-        uploaded_file = st.file_uploader("Chọn ảnh X-quang", type=["jpg", "png", "jpeg", "dcm"])
-        if uploaded_file and st.button("🚀 PHÂN TÍCH", type="primary"):
+        uploaded_file = st.file_uploader("Chọn ảnh (JPG, PNG, DICOM):", type=["jpg", "png", "jpeg", "dcm"])
+        if uploaded_file and st.button("🚀 PHÂN TÍCH & UPLOAD", type="primary"):
             with col2:
-                with st.spinner("Đang chạy YOLO & Upload Supabase..."):
+                with st.spinner("Đang xử lý & Upload..."):
                     img_out, findings, danger, img_id = process_and_save(uploaded_file)
                     
                     if img_out is not None:
                         st.image(img_out, caption=f"ID: {img_id}", use_container_width=True)
-                        
-                        # Xử lý hiển thị lỗi chi tiết
                         if isinstance(findings, dict) and "Error" in findings:
                             st.error(f"⚠️ {findings['Error']}")
                         else:
                             if danger: st.error("🔴 PHÁT HIỆN BẤT THƯỜNG")
-                            else: st.success("✅ HÌNH ẢNH BÌNH THƯỜNG")
+                            else: st.success("✅ ĐÃ UPLOAD THÀNH CÔNG")
                             st.json(findings)
                             st.toast("Đã lưu vào Cloud!", icon="☁️")
                     else:
-                        # Nếu img_out là None, findings sẽ chứa thông báo lỗi
-                        err_msg = findings.get("Error", "Lỗi không xác định") if isinstance(findings, dict) else "Lỗi xử lý ảnh."
-                        st.error(f"❌ {err_msg}")
+                        err = findings.get("Error", "Lỗi") if isinstance(findings, dict) else "Lỗi"
+                        st.error(f"❌ {err}")
 
 elif mode == "📂 Hội Chẩn & Labeling":
     st.title("📂 DATA LABELING (SUPABASE)")
@@ -293,7 +286,7 @@ elif mode == "📂 Hội Chẩn & Labeling":
             
             with c2:
                 st.info(f"BN: {record.get('patient_info')}")
-                st.warning(f"AI YOLO: {record.get('result')}")
+                st.warning(f"AI: {record.get('result')}")
                 
                 ctx = st.text_area("🏥 Bệnh cảnh:", value=record.get("clinical_context") or "", height=70)
                 note = st.text_area("👨‍⚕️ Ý kiến chuyên gia:", value=record.get("expert_note") or "", height=70)
