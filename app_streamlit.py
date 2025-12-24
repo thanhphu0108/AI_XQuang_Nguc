@@ -1,23 +1,43 @@
 import streamlit as st
+import subprocess
+import sys
+import time
+
+# --- 🛠️ TỰ ĐỘNG SỬA LỖI THƯ VIỆN (AUTO-FIX) ---
+# Đoạn này sẽ chạy đầu tiên để ép cập nhật google-generativeai
+try:
+    import google.generativeai as genai
+    # Kiểm tra version, nếu cũ quá thì update
+    version = getattr(genai, '__version__', '0.0.0')
+    if version < '0.7.0':
+        st.toast("🔄 Đang cập nhật thư viện AI... Vui lòng chờ 10s...", icon="⚙️")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "google-generativeai"])
+        st.toast("✅ Đã cập nhật xong! Đang khởi động lại...", icon="🚀")
+        time.sleep(2)
+        st.rerun()
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
+    st.rerun()
+
+# ==================================================
+# TỪ ĐÂY LÀ CODE CHÍNH (V32.4)
+# ==================================================
 import cv2
 import numpy as np
 from ultralytics import YOLO
 import os
 import torch
-import time
 from datetime import datetime
 from PIL import Image
 import pandas as pd
 import pydicom
 import json
 import ast 
-import google.generativeai as genai
 from supabase import create_client, Client
 import requests
 from io import BytesIO
 
-# ================= 1. CẤU HÌNH & CSS =================
-st.set_page_config(page_title="AI Hospital (V32.3 - Safe Mode)", page_icon="🏥", layout="wide")
+st.set_page_config(page_title="AI Hospital (V32.4 - Auto Fix)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
@@ -33,46 +53,28 @@ st.markdown("""
     .section-title { background-color: #e3f2fd; font-weight: bold; padding: 8px; margin-top: 20px; border-left: 4px solid #002f6c; text-transform: uppercase; font-size: 14px; }
     .conclusion-box { border: 2px solid #333; padding: 15px; margin-top: 20px; text-align: center; font-weight: bold; }
     .stButton>button { width: 100%; font-weight: bold; height: 45px; }
-    
-    /* Highlight radio */
     div[role="radiogroup"] > label > div:first-child { background-color: #e3f2fd; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- TỪ ĐIỂN ---
 ALLOWED_LABELS = ["Normal", "Cardiomegaly", "Pneumonia", "Effusion", "Pneumothorax", "Nodule_Mass", "Fibrosis_TB", "Fracture", "Pleural_Thickening", "Other"]
-
 LABEL_MAP = {
-    "Normal": "Bình thường",
-    "Cardiomegaly": "Bóng tim to (Cardiomegaly)",
-    "Pneumonia": "Viêm phổi (Pneumonia)",
-    "Effusion": "Tràn dịch (Effusion)",
-    "Pneumothorax": "Tràn khí (Pneumothorax)",
-    "Nodule_Mass": "Nốt/Khối mờ (Nodule/Mass)",
-    "Fibrosis_TB": "Xơ hóa/Lao (Fibrosis/TB)",
-    "Fracture": "Gãy xương (Fracture)",
-    "Pleural_Thickening": "Dày dính màng phổi",
-    "Other": "Khác (Other)"
+    "Normal": "Bình thường", "Cardiomegaly": "Bóng tim to (Cardiomegaly)", "Pneumonia": "Viêm phổi (Pneumonia)",
+    "Effusion": "Tràn dịch (Effusion)", "Pneumothorax": "Tràn khí (Pneumothorax)", "Nodule_Mass": "Nốt/Khối mờ",
+    "Fibrosis_TB": "Xơ hóa/Lao", "Fracture": "Gãy xương", "Pleural_Thickening": "Dày dính màng phổi", "Other": "Khác"
 }
 VN_LABELS_LIST = list(LABEL_MAP.values())
-
-TECHNICAL_OPTS = [
-    "✅ Phim đạt chuẩn", "⚠️ Chụp tại giường (AP View)", "⚠️ Hít vào không đủ sâu", 
-    "⚠️ Bệnh nhân xoay lệch", "⚠️ Tia quá cứng (Phim đen)", "⚠️ Tia quá mềm (Phim trắng)", "⚠️ Dị vật/Áo chưa bỏ"
-]
-
+TECHNICAL_OPTS = ["✅ Phim đạt chuẩn", "⚠️ Chụp tại giường (AP)", "⚠️ Hít vào nông", "⚠️ Bệnh nhân xoay", "⚠️ Tia cứng/mềm", "⚠️ Dị vật/Áo"]
 FEEDBACK_OPTS = ["Chưa đánh giá", "✅ Đồng thuận (AI Đúng)", "⚠️ Dương tính giả (AI Báo thừa)", "⚠️ Âm tính giả (AI Bỏ sót)", "❌ Sai hoàn toàn"]
 
 # --- KẾT NỐI SUPABASE ---
 @st.cache_resource
 def init_supabase():
     if "supabase" not in st.secrets:
-        st.error("⚠️ Chưa cấu hình [supabase] trong secrets.toml.")
+        st.error("⚠️ Chưa cấu hình [supabase] trong secrets.toml")
         return None
-    try:
-        url = st.secrets["supabase"]["url"]
-        key = st.secrets["supabase"]["key"]
-        return create_client(url, key)
+    try: return create_client(st.secrets["supabase"]["url"], st.secrets["supabase"]["key"])
     except: return None
 
 supabase = init_supabase()
@@ -82,28 +84,25 @@ MODELS_DIR = os.path.join(BASE_PATH, "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 DOCTOR_ROSTER = {
-    "ANATOMY": "Dr_Anatomy.pt", "PNEUMOTHORAX": "Dr_Pneumothorax.pt", 
-    "PNEUMONIA": "Dr_Pneumonia.pt", "TUMOR": "Dr_Tumor.pt",        
-    "EFFUSION": "Dr_Effusion.pt", "OPACITY": "Dr_Opacity.pt", "HEART": "Dr_Heart.pt"         
+    "ANATOMY": "Dr_Anatomy.pt", "PNEUMOTHORAX": "Dr_Pneumothorax.pt", "PNEUMONIA": "Dr_Pneumonia.pt", 
+    "TUMOR": "Dr_Tumor.pt", "EFFUSION": "Dr_Effusion.pt", "OPACITY": "Dr_Opacity.pt", "HEART": "Dr_Heart.pt"         
 }
 
-# ================= 2. CORE FUNCTIONS =================
 @st.cache_resource
 def load_models():
-    device = 0 if torch.cuda.is_available() else 'cpu'
     loaded_models = {}
     for role, filename in DOCTOR_ROSTER.items():
         path = os.path.join(MODELS_DIR, filename)
         if os.path.exists(path):
             try: loaded_models[role] = YOLO(path)
             except: pass
-    return loaded_models, [], device
+    return loaded_models
 
-MODELS, MODEL_STATUS, DEVICE = load_models()
+MODELS = load_models()
 
 # --- SUPABASE UTILS ---
 def upload_image(img_cv, filename):
-    if supabase is None: return None
+    if not supabase: return None
     try:
         _, buffer = cv2.imencode('.jpg', cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR))
         bucket = "xray_images"
@@ -114,68 +113,69 @@ def upload_image(img_cv, filename):
         except: return None
 
 def save_log(data):
-    if supabase is None: return False
+    if not supabase: return False
     try:
         supabase.table("logs").upsert(data).execute()
         return True
-    except Exception as e:
-        st.error(f"❌ Lỗi lưu Data: {e}")
-        return False
+    except: return False
 
 def get_logs():
-    if supabase is None: return pd.DataFrame()
+    if not supabase: return pd.DataFrame()
     try:
         response = supabase.table("logs").select("*").order("created_at", desc=True).execute()
         return pd.DataFrame(response.data)
     except: return pd.DataFrame()
 
-# --- GEMINI (V32.3 - SAFE MODE) ---
+# --- GEMINI (V32.4 - AUTO DISCOVERY) ---
+# Hàm này thông minh hơn: Nó sẽ hỏi Google "Mày có model nào?" rồi mới dùng
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     if not api_key: return {"labels": [], "reasoning": "Thiếu API Key"}
     
-    try: 
+    try:
         genai.configure(api_key=api_key)
-    except: 
-        return {"labels": [], "reasoning": "API Key không hợp lệ"}
-
-    # DANH SÁCH AN TOÀN (Flash lên đầu vì ít lỗi 404 nhất)
-    # Thêm 'gemini-pro' (bản 1.0 cũ) vào cuối để fallback nếu thư viện quá cũ
-    model_priority = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
-
-    labels_str = ", ".join(ALLOWED_LABELS) 
-    tech_note = ", ".join(tags) if tags else "Chuẩn."
-    
-    prompt = f"""
-    Role: Senior Radiologist.
-    INPUTS: Context="{context}", ExpertNote="{note}", Guidance="{guide}", TechQA="{tech_note}".
-    TASK: Analyze Chest X-ray. Select labels from: [{labels_str}].
-    OUTPUT JSON: {{ "labels": ["..."], "reasoning": "..." }} (Reasoning in Vietnamese)
-    """
-
-    last_error = ""
-    for model_name in model_priority:
+        
+        # 1. TỰ ĐỘNG TÌM MODEL KHẢ DỤNG (QUAN TRỌNG)
+        available_models = []
         try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content([prompt, image], generation_config={"response_mime_type": "application/json"})
-            result = json.loads(response.text)
-            result["used_model"] = model_name
-            return result
-        except Exception as e:
-            last_error = str(e)
-            continue 
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    available_models.append(m.name)
+        except: pass
+        
+        # Ưu tiên Flash -> Pro -> Bất kỳ cái nào có chữ 'gemini'
+        target_model = "gemini-1.5-flash" # Mặc định
+        
+        # Lọc thông minh
+        gemini_candidates = [m for m in available_models if "gemini" in m]
+        if gemini_candidates:
+            # Nếu có 1.5 flash thì dùng
+            if any("1.5-flash" in m for m in gemini_candidates): target_model = "gemini-1.5-flash"
+            # Nếu không thì dùng cái đầu tiên tìm thấy
+            else: target_model = gemini_candidates[0].replace("models/", "")
+            
+        st.toast(f"🤖 Đang dùng Model: {target_model}") # Báo cho người dùng biết
 
-    # NẾU TẤT CẢ ĐỀU THẤT BẠI
-    return {
-        "labels": [], 
-        "reasoning": f"⚠️ Lỗi kết nối Gemini (Hết Model khả dụng): {last_error}", 
-        "used_model": "Failed"
-    }
+        labels_str = ", ".join(ALLOWED_LABELS) 
+        tech_note = ", ".join(tags) if tags else "Chuẩn."
+        
+        prompt = f"""
+        Role: Senior Radiologist.
+        INPUTS: Context="{context}", ExpertNote="{note}", Guidance="{guide}", TechQA="{tech_note}".
+        TASK: Analyze Chest X-ray. Select labels from: [{labels_str}].
+        OUTPUT JSON: {{ "labels": ["..."], "reasoning": "..." }} (Reasoning in Vietnamese)
+        """
+        
+        model = genai.GenerativeModel(target_model)
+        response = model.generate_content([prompt, image], generation_config={"response_mime_type": "application/json"})
+        return json.loads(response.text)
+
+    except Exception as e:
+        return {"labels": [], "reasoning": f"Lỗi Gemini: {str(e)}"}
 
 # --- HTML REPORT ---
 def generate_html_report(findings_input, has_danger, patient_info, img_id, gemini_text=""):
     current_time = datetime.now().strftime('%H:%M ngày %d/%m/%Y')
     findings_db = {"Lung": [], "Pleura": [], "Heart": []}
-    
     if isinstance(findings_input, dict): findings_db = findings_input
     elif isinstance(findings_input, str):
         try: findings_db = ast.literal_eval(findings_input)
@@ -191,26 +191,13 @@ def generate_html_report(findings_input, has_danger, patient_info, img_id, gemin
     bone_html = '<ul style="margin:5px 0 10px 20px;"><li>Khung xương lồng ngực cân đối.</li></ul>'
     
     is_abnormal = has_danger or (len(findings_db.get("Lung", [])) + len(findings_db.get("Pleura", [])) + len(findings_db.get("Heart", [])) > 0)
-    
-    if is_abnormal:
-        conclusion_html = """<div style='color:#c62828; font-size:18px;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG</div>"""
-    else:
-        conclusion_html = """<div style='color:#2e7d32; font-size:18px;'>✅ KẾT LUẬN: CHƯA GHI NHẬN BẤT THƯỜNG</div>"""
-
-    gemini_block = ""
-    if gemini_text:
-        gemini_block = f"""<div style="margin-top:15px; padding:10px; background:#fffde7; border:1px dashed orange; font-style:italic;"><b>🤖 Gemini Gợi ý:</b> {gemini_text}</div>"""
+    conclusion_html = """<div style='color:#c62828; font-size:18px;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG</div>""" if is_abnormal else """<div style='color:#2e7d32; font-size:18px;'>✅ KẾT LUẬN: CHƯA GHI NHẬN BẤT THƯỜNG</div>"""
+    gemini_block = f"""<div style="margin-top:15px; padding:10px; background:#fffde7; border:1px dashed orange; font-style:italic;"><b>🤖 Gemini Gợi ý:</b> {gemini_text}</div>""" if gemini_text else ""
 
     html = f"""
     <div class="a4-paper">
-        <div class="hospital-header">
-            <h1>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h1>
-            <p>Hệ thống AI Hỗ trợ Chẩn đoán X-quang Ngực</p>
-        </div>
-        <table class="info-table">
-            <tr><td style="width:60%;"><strong>Họ tên:</strong> {patient_info}</td><td style="text-align:right;"><strong>Mã HS:</strong> {img_id}</td></tr>
-            <tr><td><strong>Chỉ định:</strong> X-quang ngực thẳng (PA)</td><td style="text-align:right;"><strong>Ngày:</strong> {current_time}</td></tr>
-        </table>
+        <div class="hospital-header"><h1>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h1><p>Hệ thống AI Hỗ trợ Chẩn đoán X-quang Ngực</p></div>
+        <table class="info-table"><tr><td style="width:60%;"><strong>Họ tên:</strong> {patient_info}</td><td style="text-align:right;"><strong>Mã HS:</strong> {img_id}</td></tr><tr><td><strong>Chỉ định:</strong> X-quang ngực thẳng (PA)</td><td style="text-align:right;"><strong>Ngày:</strong> {current_time}</td></tr></table>
         <div class="section-title">I. MÔ TẢ HÌNH ẢNH</div>
         <strong>1. Nhu mô phổi:</strong>{lung_html}
         <strong>2. Màng phổi:</strong>{pleura_html}
@@ -284,20 +271,11 @@ def process_and_save(image_file):
 
     img_id = datetime.now().strftime("%d%m%Y%H%M%S")
     img_url = upload_image(display_img, f"XRAY_{img_id}.jpg")
-    
     if img_url:
-        save_log({
-            "id": img_id, 
-            "created_at": datetime.now().isoformat(), 
-            "image_url": img_url, 
-            "result": "BẤT THƯỜNG" if has_danger else "BÌNH THƯỜNG", 
-            "details": str(findings_db), 
-            "patient_info": patient_info
-        })
-
+        save_log({"id": img_id, "created_at": datetime.now().isoformat(), "image_url": img_url, "result": "BẤT THƯỜNG" if has_danger else "BÌNH THƯỜNG", "details": str(findings_db), "patient_info": patient_info})
     return display_img, findings_db, has_danger, img_id, Image.fromarray(img_resized)
 
-# ================= 3. GIAO DIỆN CHÍNH =================
+# ================= UI =================
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3063/3063176.png", width=60)
     st.title("ĐIỀU KHIỂN")
@@ -313,7 +291,6 @@ if mode == "🔍 Phân Tích & In Phiếu":
             with col2:
                 with st.spinner("Đang xử lý..."):
                     img_out, findings, danger, img_id, pil_img = process_and_save(uploaded_file)
-                    
                     if img_out is not None:
                         t1, t2 = st.tabs(["🖼️ Ảnh AI", "📄 Phiếu Kết Quả"])
                         with t1: st.image(img_out, caption=f"ID: {img_id}", use_container_width=True)
@@ -322,9 +299,7 @@ if mode == "🔍 Phân Tích & In Phiếu":
                             if api_key:
                                 res = ask_gemini(api_key, pil_img)
                                 gemini_txt = res.get("reasoning", "")
-                                used_model = res.get("used_model", "")
                                 if gemini_txt and supabase: save_log({"id": img_id, "ai_reasoning": gemini_txt})
-                                if used_model: st.toast(f"Đã dùng: {used_model}")
                             html = generate_html_report(findings, danger, "Nguyễn Văn A", img_id, gemini_txt)
                             st.markdown(html, unsafe_allow_html=True)
                         if supabase: st.success("✅ Đã lưu vào Cloud!")
@@ -332,117 +307,74 @@ if mode == "🔍 Phân Tích & In Phiếu":
 
 elif mode == "📂 Hội Chẩn (Cloud)":
     st.title("📂 HỘI CHẨN & GÁN NHÃN")
-    if supabase is None:
-        st.error("⛔ Chưa kết nối Cloud.")
+    if not supabase: st.error("⛔ Chưa kết nối Cloud.")
     else:
         df = get_logs()
         if not df.empty:
             df = df.fillna("")
             id_list = df['id'].tolist()
             selected_id = st.selectbox("👉 Chọn Mã Hồ Sơ:", id_list)
-            
             if selected_id:
                 record = df[df["id"] == selected_id].iloc[0]
-                
                 pil_img = None
                 if record.get('image_url'):
-                    try:
-                        response = requests.get(record['image_url'], timeout=5)
-                        pil_img = Image.open(BytesIO(response.content))
+                    try: pil_img = Image.open(BytesIO(requests.get(record['image_url'], timeout=5).content))
                     except: pass
                 
                 t_work, t_paper = st.tabs(["👨‍⚕️ Bàn Làm Việc", "📄 Xem Phiếu A4"])
-                
                 with t_work:
                     c1, c2 = st.columns([1, 1])
                     with c1:
                         if record.get('image_url'): st.image(record['image_url'], use_container_width=True)
-                    
                     with c2:
                         st.info(f"BN: {record.get('patient_info')} | AI: {record.get('result')}")
                         if record.get('ai_reasoning'):
                             with st.expander("🤖 Đọc kết quả Gemini cũ"): st.write(record.get('ai_reasoning'))
-
-                        st.markdown("#### 📝 Thông tin Lâm sàng")
+                        
+                        st.markdown("#### 📝 Lâm sàng & Kỹ thuật")
                         ctx = st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "", height=68)
                         note = st.text_area("Ý kiến chuyên gia:", value=record.get("expert_note") or "", height=68)
                         guide = st.text_area("Prompt cho AI:", value=record.get("prompt_guidance") or "", height=68)
+                        tags = st.multiselect("Lỗi Kỹ thuật:", TECHNICAL_OPTS, default=[t.strip() for t in (record.get("technical_tags") or "").split(";") if t])
                         
-                        tags_str = record.get("technical_tags") or ""
-                        def_tags = [t.strip() for t in tags_str.split(";")] if tags_str else []
-                        tags = st.multiselect("Đánh giá Kỹ thuật:", TECHNICAL_OPTS, default=def_tags)
-                        
-                        if st.button("🧠 Hỏi lại Gemini (Safe Mode)"):
+                        if st.button("🧠 Hỏi lại Gemini (Auto Fix)"):
                             if not api_key: st.error("⚠️ Thiếu API Key!")
-                            elif not pil_img: st.error("⚠️ Không tải được ảnh từ Cloud!")
+                            elif not pil_img: st.error("⚠️ Lỗi ảnh!")
                             else:
-                                with st.spinner("Đang chạy Gemini 1.5 Flash..."):
+                                with st.spinner("Đang tìm Model phù hợp..."):
                                     res = ask_gemini(api_key, pil_img, ctx, note, guide, tags)
-                                    txt = res.get("reasoning", "")
-                                    model_used = res.get("used_model", "")
-                                    
-                                    if "Failed" in model_used:
-                                        st.error(txt) 
-                                    elif txt:
-                                        save_log({"id": selected_id, "ai_reasoning": txt})
-                                        st.success(f"Đã cập nhật! (Model dùng: {model_used})")
-                                        time.sleep(1)
-                                        st.rerun()
-
+                                    if res.get("reasoning"):
+                                        save_log({"id": selected_id, "ai_reasoning": res["reasoning"]})
+                                        st.success("Đã cập nhật!")
+                                        time.sleep(1); st.rerun()
+                                    else: st.error(f"Lỗi: {res}")
+                        
                         st.markdown("---")
-                        st.markdown("#### 🏷️ Gán nhãn & Kết luận")
-                        
+                        st.markdown("#### 🏷️ Gán nhãn")
                         fb1 = str(record.get("feedback_1") or "Chưa đánh giá")
-                        
                         if fb1 == "Chưa đánh giá":
-                            st.markdown('<div class="step-badge">VÒNG 1: SƠ BỘ</div>', unsafe_allow_html=True)
+                            st.markdown('<div class="step-badge">VÒNG 1</div>', unsafe_allow_html=True)
                             new_fb = st.radio("Đánh giá AI:", FEEDBACK_OPTS, index=0)
-                            
-                            lbl_str = record.get("label_1") or ""
-                            def_lbls = [l.strip() for l in lbl_str.split(";")] if lbl_str else []
-                            new_lbls = st.multiselect("Chốt bệnh lý:", VN_LABELS_LIST, default=def_lbls)
-                            
-                            saved_rating = record.get("prompt_rating", "Khá")
-                            rating_opts = ["Tệ", "TB", "Khá", "Tốt", "Xuất sắc"]
-                            val_idx = rating_opts.index(saved_rating) if saved_rating in rating_opts else 2
-                            rating = st.select_slider("Chất lượng Prompt:", options=rating_opts, value=rating_opts[val_idx])
-
+                            new_lbls = st.multiselect("Chốt bệnh:", VN_LABELS_LIST, default=[l.strip() for l in (record.get("label_1") or "").split(";") if l])
+                            rating = st.select_slider("Prompt:", options=["Tệ", "TB", "Khá", "Tốt", "Xuất sắc"], value=record.get("prompt_rating", "Khá"))
                             if st.button("💾 LƯU VÒNG 1"):
-                                save_log({
-                                    "id": selected_id, 
-                                    "clinical_context": ctx, "expert_note": note, "prompt_guidance": guide,
-                                    "technical_tags": "; ".join(tags), 
-                                    "feedback_1": new_fb, "label_1": "; ".join(new_lbls),
-                                    "prompt_rating": rating
-                                })
-                                st.success("Đã lưu Vòng 1!")
-                                time.sleep(0.5)
-                                st.rerun()
+                                save_log({"id": selected_id, "clinical_context": ctx, "expert_note": note, "prompt_guidance": guide, "technical_tags": "; ".join(tags), "feedback_1": new_fb, "label_1": "; ".join(new_lbls), "prompt_rating": rating})
+                                st.success("Đã lưu!"); time.sleep(0.5); st.rerun()
                         else:
                             st.info(f"✅ Vòng 1: {fb1}")
-                            st.markdown('<div class="step-badge" style="background:#c62828">VÒNG 2: FINAL AUDIT</div>', unsafe_allow_html=True)
-                            
+                            st.markdown('<div class="step-badge" style="background:#c62828">VÒNG 2</div>', unsafe_allow_html=True)
                             new_fb2 = st.radio("Đánh giá cuối:", FEEDBACK_OPTS, index=0, key="fb2")
-                            
-                            lbl_str2 = record.get("label_2") or ""
-                            def_lbls2 = [l.strip() for l in lbl_str2.split(";")] if lbl_str2 else []
-                            new_lbls2 = st.multiselect("CHỐT BỆNH ÁN:", VN_LABELS_LIST, default=def_lbls2, key="lbl2")
-                            
+                            new_lbls2 = st.multiselect("CHỐT BỆNH ÁN:", VN_LABELS_LIST, default=[l.strip() for l in (record.get("label_2") or "").split(";") if l], key="lbl2")
                             if st.button("💾 LƯU HỒ SƠ"):
                                 save_log({"id": selected_id, "feedback_2": new_fb2, "label_2": "; ".join(new_lbls2)})
-                                st.success("Đã chốt hồ sơ!")
-                                time.sleep(0.5)
-                                st.rerun()
-
+                                st.success("Đã chốt!"); time.sleep(0.5); st.rerun()
                 with t_paper:
                     raw_details = record.get("details", "")
                     is_danger = record.get("result") == "BẤT THƯỜNG"
                     p_info = record.get("patient_info", "N/A")
                     gemini_old = record.get("ai_reasoning", "")
-                    html_repro = generate_html_report(raw_details, is_danger, p_info, selected_id, gemini_old)
-                    st.markdown(html_repro, unsafe_allow_html=True)
-        else:
-            st.warning("📭 Chưa có dữ liệu trên Cloud.")
+                    st.markdown(generate_html_report(raw_details, is_danger, p_info, selected_id, gemini_old), unsafe_allow_html=True)
+        else: st.warning("📭 Chưa có dữ liệu.")
 
 elif mode == "🛠️ Xuất Dataset":
     st.title("🛠️ DATASET")
@@ -450,6 +382,5 @@ elif mode == "🛠️ Xuất Dataset":
         df = get_logs()
         if not df.empty:
             st.dataframe(df)
-            st.download_button("📥 Tải File CSV", df.to_csv(index=False).encode('utf-8'), "data.csv", "text/csv")
-        else:
-            st.warning("Chưa có dữ liệu.")
+            st.download_button("📥 Tải CSV", df.to_csv(index=False).encode('utf-8'), "data.csv", "text/csv")
+        else: st.warning("Chưa có dữ liệu.")
