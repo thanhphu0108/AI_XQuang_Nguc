@@ -27,7 +27,7 @@ except ImportError:
     st.rerun()
 
 # ================= 1. CẤU HÌNH & CSS =================
-st.set_page_config(page_title="AI Hospital (V33.7 - Workflow Fix)", page_icon="🏥", layout="wide")
+st.set_page_config(page_title="AI Hospital (V33.8 - Popup UI)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
@@ -68,8 +68,12 @@ st.markdown("""
     .labeling-zone { border-left: 4px solid #ff9800 !important; background-color: #fff8e1 !important; }
     .stButton>button { width: 100%; font-weight: bold; height: 45px; }
     
-    /* Chat compact */
-    .chat-row { font-size: 12px; padding: 5px; border-bottom: 1px solid #eee; color: #666; }
+    /* Chat row compact */
+    .chat-row { 
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 8px; border-bottom: 1px solid #eee; font-size: 13px;
+    }
+    .chat-row:hover { background-color: #f5f5f5; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -144,13 +148,23 @@ def get_logs():
         return pd.DataFrame(response.data)
     except: return pd.DataFrame()
 
+# --- POPUP DIALOG (MỚI) ---
+@st.dialog("📜 CHI TIẾT HỘI CHẨN")
+def view_log_popup(item):
+    st.caption(f"🕒 Thời gian: {item.get('time')} | Model: {item.get('model')}")
+    
+    st.markdown("### ❓ Câu hỏi (Prompt)")
+    st.info(item.get('prompt', 'Không có nội dung'))
+    
+    st.markdown("### 🤖 Trả lời (Response)")
+    st.success(item.get('response', 'Không có nội dung'))
+
 # --- GEMINI ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     if not api_key: return {"labels": [], "reasoning": "Thiếu API Key", "prompt": ""}
     
     try:
         genai.configure(api_key=api_key)
-        # Ưu tiên Flash vì nó ít lỗi 429 nhất, sau đó mới tới Pro
         model_priority = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
         
         labels_str = ", ".join(STRUCTURED_LABELS) 
@@ -166,7 +180,7 @@ Vai trò: Bác sĩ chẩn đoán hình ảnh chuyên sâu (Senior Radiologist).
 
 ==== 2. ĐIỀU KIỆN KỸ THUẬT (QA/QC) QUAN TRỌNG ====
 - Trạng thái phim: {tech_note}
-(Lưu ý: Hãy cân nhắc các yếu tố kỹ thuật trên để tránh Dương tính giả/Âm tính giả. Ví dụ: Nếu hít không sâu, đừng đọc vội là tim to hay rốn phổi đậm trừ khi quá rõ ràng).
+(Lưu ý: Hãy cân nhắc các yếu tố kỹ thuật trên để tránh Dương tính giả/Âm tính giả).
 
 ==== 3. NHIỆM VỤ ====
 - Phân tích hình ảnh X-quang đính kèm.
@@ -284,7 +298,6 @@ if mode == "🔍 Phân Tích & In Phiếu":
                 st.success("Đã phân tích xong và lưu vào Cloud.")
             else: st.error("Lỗi.")
 
-# ... (TAB 2: HỘI CHẨN - WORKFLOW MODE) ...
 elif mode == "📂 Hội Chẩn (Cloud)":
     st.title("📂 HỘI CHẨN CHUYÊN GIA")
     
@@ -299,37 +312,30 @@ elif mode == "📂 Hội Chẩn (Cloud)":
             if selected_id:
                 record = df[df["id"] == selected_id].iloc[0]
                 
-                # Load ảnh
                 pil_img = None
                 if record.get('image_url'):
                     try: pil_img = Image.open(BytesIO(requests.get(record['image_url'], timeout=5).content))
                     except: pass
                 
-                # History (JSON)
                 hist_data = record.get('ai_reasoning', [])
                 if isinstance(hist_data, str):
                     try: hist_data = json.loads(hist_data)
                     except: hist_data = []
                 
-                # --- CHIA 2 CỘT ---
                 col_left, col_right = st.columns([1.2, 1])
                 
-                # === CỘT TRÁI: ẢNH & GÁN NHÃN ===
+                # === CỘT TRÁI ===
                 with col_left:
-                    # 1. ẢNH
                     st.markdown('<div class="sci-card">', unsafe_allow_html=True)
-                    if record.get('image_url'):
-                        st.image(record['image_url'], use_container_width=True)
+                    if record.get('image_url'): st.image(record['image_url'], use_container_width=True)
                     res_yolo = record.get('result')
                     color = "red" if res_yolo == "BẤT THƯỜNG" else "green"
                     st.caption(f"Sàng lọc sơ bộ (YOLO): {res_yolo}")
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                    # 2. KHUNG GÁN NHÃN (Trái)
                     st.markdown('<div class="sci-card labeling-zone">', unsafe_allow_html=True)
-                    st.markdown('<div class="sci-header">🏷️ GÁN NHÃN NHANH</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="sci-header">🏷️ GÁN NHÃN & KẾT LUẬN</div>', unsafe_allow_html=True)
                     
-                    # Auto-Select Logic
                     saved_lbls = [l.strip() for l in (record.get("label_1") or "").split(";") if l]
                     if not saved_lbls and hist_data:
                         last_resp = hist_data[0].get("response", "")
@@ -342,17 +348,21 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                     safe_rating = record.get("prompt_rating") if record.get("prompt_rating") in RATING_OPTS else "Khá"
                     rating = st.select_slider("Chất lượng Prompt:", options=RATING_OPTS, value=safe_rating)
                     
-                    if st.button("💾 LƯU KẾT QUẢ GÁN NHÃN", type="primary"):
-                        save_log({
-                            "id": selected_id, "feedback_1": new_fb, "label_1": "; ".join(new_lbls), "prompt_rating": rating
-                        })
-                        st.success("✅ Đã lưu nhãn!")
+                    # --- NÚT LƯU Ở GIỮA ---
+                    c1, c2, c3 = st.columns([1, 2, 1])
+                    with c2:
+                        if st.button("💾 LƯU KẾT QUẢ", type="primary", use_container_width=True):
+                            save_log({
+                                "id": selected_id, "feedback_1": new_fb, "label_1": "; ".join(new_lbls), "prompt_rating": rating
+                            })
+                            st.success("✅ Đã lưu!")
+                    
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                # === CỘT PHẢI: CONTEXT & CHAT ===
+                # === CỘT PHẢI ===
                 with col_right:
                     st.markdown('<div class="sci-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="sci-header">📝 DỮ LIỆU ĐẦU VÀO</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="sci-header">📝 DỮ LIỆU LÂM SÀNG</div>', unsafe_allow_html=True)
                     ctx = st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "", height=80)
                     note = st.text_area("Ghi chú:", value=record.get("expert_note") or "", height=60)
                     guide = st.text_area("Prompt:", value=record.get("prompt_guidance") or "", height=60)
@@ -363,7 +373,6 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         st.toast("Đã lưu!")
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                    # --- NÚT HỎI GEMINI ---
                     if st.button("🧠 HỎI GEMINI (Lưu Nhật Ký)", type="secondary"):
                         if not api_key: st.error("Thiếu API Key")
                         else:
@@ -371,8 +380,7 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                                 res = ask_gemini(api_key, pil_img, ctx, note, guide, tags)
                                 txt = res.get("reasoning", "")
                                 if txt:
-                                    if "KEY HẾT HẠN" in txt:
-                                        st.error(txt)
+                                    if "KEY HẾT HẠN" in txt: st.error(txt)
                                     else:
                                         new_entry = {
                                             "time": datetime.now().strftime("%H:%M %d/%m"),
@@ -386,12 +394,11 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                                         time.sleep(0.5); st.rerun()
                                 else: st.error(f"Lỗi: {res}")
 
-                    # --- KHUNG KẾT QUẢ NGAY DƯỚI NÚT ---
+                    # Hiển thị kết quả mới nhất ngay dưới nút
                     if hist_data:
                         last_item = hist_data[0]
                         model = last_item.get('model', 'Gemini')
                         resp = last_item.get('response', '').replace("\n", "<br>")
-                        
                         st.markdown(f"""
                         <div class="gemini-result-zone">
                             <h4>🤖 KẾT QUẢ MỚI NHẤT ({model})</h4>
@@ -399,18 +406,21 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # Show History
-                        with st.expander("📜 Xem lịch sử cũ hơn"):
-                            for item in hist_data[1:]:
-                                st.markdown(f"""
-                                <div class="chat-row">
-                                    <b>{item.get('time','')}</b>: {item.get('response','')[:100]}...
-                                </div>
-                                """, unsafe_allow_html=True)
+                        with st.expander("📜 Lịch sử cũ hơn"):
+                            for i, item in enumerate(hist_data[1:]): # Bỏ cái đầu tiên (đã hiện)
+                                c_txt, c_btn = st.columns([4, 1])
+                                with c_txt:
+                                    st.markdown(f"<b>{item.get('time')}</b>: {item.get('response')[:50]}...", unsafe_allow_html=True)
+                                with c_btn:
+                                    if st.button("🔍", key=f"view_old_{i}"):
+                                        view_log_popup(item)
+                    
+                    # Nút xem full cho cái mới nhất (nếu muốn xem prompt)
+                    if hist_data and st.button("🔍 Xem chi tiết (Prompt + Full Text)"):
+                        view_log_popup(hist_data[0])
 
         else: st.warning("📭 Database trống.")
 
-# ... (TAB 3: ADMIN GIỮ NGUYÊN) ...
 elif mode == "🛠️ Xuất Dataset (Admin)":
     st.title("🛠️ XUẤT DATASET YOLO (Admin Only)")
     col_auth, col_empty = st.columns([1, 2])
