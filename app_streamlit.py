@@ -26,8 +26,8 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
     st.rerun()
 
-# ================= 1. CẤU HÌNH & CSS (FIX ADMIN & REPORT) =================
-st.set_page_config(page_title="AI Hospital (V34.10 - Stable)", page_icon="🏥", layout="wide")
+# ================= 1. CẤU HÌNH & CSS (FINAL STABLE) =================
+st.set_page_config(page_title="AI Hospital (V35.0 - Debug Mode)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
@@ -56,20 +56,13 @@ st.markdown("""
         font-size: 12px; color: #444; background: white; padding: 8px; border-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
     }
     
-    /* 4. A4 PAPER (TAB 1) - QUAN TRỌNG */
+    /* 4. A4 PAPER */
     .a4-paper {
-        background-color: white !important;
-        padding: 40px;
-        border: 1px solid #ccc;
-        box-shadow: 0 0 15px rgba(0,0,0,0.1);
-        font-family: 'Times New Roman', serif;
-        color: #000;
-        margin-top: 10px;
-        min-height: 600px;
+        background-color: white !important; padding: 40px; border: 1px solid #ccc;
+        box-shadow: 0 0 15px rgba(0,0,0,0.1); font-family: 'Times New Roman', serif; color: #000; margin-top: 10px; min-height: 600px;
     }
     .rp-header { text-align: center; border-bottom: 2px solid #002f6c; padding-bottom: 15px; margin-bottom: 20px; }
     .rp-title { font-size: 22px; font-weight: bold; color: #002f6c; text-transform: uppercase; margin: 0; }
-    .rp-sub { font-size: 13px; font-style: italic; margin-top: 5px; color: #555; }
     .rp-section { 
         background-color: #f0f2f5; border-left: 5px solid #002f6c; padding: 8px; 
         font-weight: bold; font-size: 14px; text-transform: uppercase; margin-top: 20px; margin-bottom: 10px; 
@@ -97,7 +90,10 @@ RATING_OPTS = ["Tệ", "TB", "Khá", "Tốt", "Xuất sắc"]
 
 # --- UTILS ---
 def get_vn_time(): return (datetime.utcnow() + timedelta(hours=7)).strftime("%H:%M %d/%m/%Y")
-def check_password(password): return hashlib.md5(password.encode()).hexdigest() == "25e4d273760a373b976d9102372d627c"
+
+def check_password(password):
+    # PASSWORD CỨNG: Admin@123p
+    return password == "Admin@123p"
 
 # --- KẾT NỐI SUPABASE ---
 @st.cache_resource
@@ -108,7 +104,6 @@ def init_supabase():
 
 supabase = init_supabase()
 
-# --- LOAD MODEL ---
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_PATH, "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -152,7 +147,7 @@ def view_log_popup(item):
     st.markdown(f"""<div class="popup-result-box">{item.get('response', '').replace("\n", "<br>")}</div>""", unsafe_allow_html=True)
     with st.expander("🔌 Xem Prompt"): st.code(item.get('prompt', ''), language="text")
 
-# --- GEMINI ---
+# --- GEMINI (RAW ERROR MODE) ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     if not api_key: return {"labels": [], "reasoning": "Thiếu API Key", "prompt": ""}
     try:
@@ -170,6 +165,8 @@ Vai trò: Bác sĩ chẩn đoán hình ảnh (Senior Radiologist).
 ==== 3. NHIỆM VỤ: Phân tích X-quang. Chọn nhãn từ: [{labels_str}].
 OUTPUT JSON: {{ "labels": ["..."], "reasoning": "VIẾT THEO CẤU TRÚC: Kỹ thuật, Mô tả (Tim, Phổi, Màng phổi, Xương), Biện luận, Kết luận." }}
         """
+        
+        last_error = ""
         for model_name in model_priority:
             try:
                 model = genai.GenerativeModel(model_name)
@@ -179,13 +176,18 @@ OUTPUT JSON: {{ "labels": ["..."], "reasoning": "VIẾT THEO CẤU TRÚC: Kỹ t
                 result["sent_prompt"] = prompt
                 return result
             except Exception as e:
-                if "429" in str(e): time.sleep(1); continue
-                elif "API_KEY" in str(e): return {"labels": [], "reasoning": "🔑 KEY HẾT HẠN!", "prompt": ""}
-                else: continue
-        return {"labels": [], "reasoning": "Hệ thống bận.", "sent_prompt": prompt}
-    except Exception as e: return {"labels": [], "reasoning": str(e), "sent_prompt": ""}
+                # Lấy lỗi chi tiết
+                err_msg = str(e)
+                if "429" in err_msg: time.sleep(1); last_error = "429 (Quá tải)"; continue
+                elif "API_KEY" in err_msg: return {"labels": [], "reasoning": "🔑 KEY HẾT HẠN HOẶC SAI!", "prompt": ""}
+                else: last_error = err_msg; continue
+        
+        # TRẢ VỀ LỖI NGUYÊN BẢN (RAW)
+        return {"labels": [], "reasoning": f"⚠️ Lỗi kết nối (RAW): {last_error}", "sent_prompt": prompt}
+        
+    except Exception as e: return {"labels": [], "reasoning": f"CRASH: {str(e)}", "sent_prompt": ""}
 
-# --- HTML REPORT GENERATOR ---
+# --- HTML REPORT ---
 def generate_html_report(findings_db, has_danger, patient_info, img_id):
     current_time = get_vn_time()
     def mk_list(items, default):
@@ -302,6 +304,7 @@ elif mode == "📂 Hội Chẩn (Cloud)":
             
             if selected_id:
                 record = df[df["id"] == selected_id].iloc[0]
+                
                 pil_img = None
                 if record.get('image_url'):
                     try: pil_img = Image.open(BytesIO(requests.get(record['image_url'], timeout=5).content))
@@ -322,7 +325,7 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                     st.markdown('</div>', unsafe_allow_html=True)
 
                     if len(hist_data) > 0:
-                        st.markdown('<div class="input-title">📜 NHẬT KÝ HỘI CHẨN</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="labeling-header">📜 NHẬT KÝ HỘI CHẨN</div>', unsafe_allow_html=True)
                         st.markdown('<div class="history-container">', unsafe_allow_html=True)
                         for i, item in enumerate(hist_data):
                             c_txt, c_btn = st.columns([5, 1])
@@ -335,7 +338,7 @@ elif mode == "📂 Hội Chẩn (Cloud)":
 
                 # === CỘT PHẢI: INPUT -> KẾT QUẢ -> LABELING ===
                 with col_right:
-                    st.markdown('<div class="input-title">1. DỮ LIỆU ĐẦU VÀO</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="labeling-header">1. DỮ LIỆU ĐẦU VÀO</div>', unsafe_allow_html=True)
                     tags = st.multiselect("⚙️ Điều kiện kỹ thuật (QA/QC):", TECHNICAL_OPTS, default=[t.strip() for t in (record.get("technical_tags") or "").split(";") if t])
                     ctx = st.text_area("🤒 Bệnh cảnh (Context):", value=record.get("clinical_context") or "", height=80)
                     note = st.text_area("👨‍⚕️ Ý kiến chuyên gia:", value=record.get("expert_note") or "", height=60)
@@ -359,10 +362,10 @@ elif mode == "📂 Hội Chẩn (Cloud)":
 
                     if hist_data:
                         last_item = hist_data[0]
-                        st.markdown(f"""<div class="gemini-full-box"><strong>🤖 KẾT QUẢ MỚI NHẤT ({last_item.get('model')})</strong><br><hr style="margin:5px 0">{last_item.get('response', '').replace("\n", "<br>")}</div>""", unsafe_allow_html=True)
+                        model_name = last_item.get('model', 'N/A')
+                        st.markdown(f"""<div class="gemini-full-box"><strong>🤖 KẾT QUẢ MỚI NHẤT ({model_name})</strong><br><hr style="margin:5px 0">{last_item.get('response', '').replace("\n", "<br>")}</div>""", unsafe_allow_html=True)
                         with st.expander("🔌 Debug: Xem Prompt"): st.code(last_item.get('prompt', ''), language="text")
 
-                    # LABELING
                     st.markdown('<div class="labeling-box">', unsafe_allow_html=True)
                     st.markdown('<div class="labeling-header">🏷️ KẾT LUẬN & GÁN NHÃN</div>', unsafe_allow_html=True)
                     
@@ -390,7 +393,7 @@ elif mode == "🛠️ Xuất Dataset (Admin)":
     if pwd and check_password(pwd):
         df = get_logs()
         if not df.empty:
-            # SỬ DỤNG SESSION STATE ĐỂ GIỮ NÚT DOWNLOAD
+            # FIX: Dùng session_state để giữ nút tải
             if 'zip_btn' not in st.session_state: st.session_state.zip_btn = None
             
             if st.button("🚀 TẠO FILE DATASET (ZIP)"):
@@ -406,7 +409,7 @@ elif mode == "🛠️ Xuất Dataset (Admin)":
                                     zf.writestr(f"labels/{r['id']}.txt", txt)
                                 except: pass
                     st.session_state.zip_btn = buf.getvalue()
-                    st.rerun() # Reload để hiện nút tải xuống
+                    st.rerun()
             
             if st.session_state.zip_btn:
                 st.download_button("📥 TẢI DATA.ZIP NGAY", st.session_state.zip_btn, "data.zip", "application/zip", type="primary")
