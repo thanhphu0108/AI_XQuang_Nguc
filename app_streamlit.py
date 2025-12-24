@@ -14,7 +14,7 @@ import google.generativeai as genai
 from supabase import create_client, Client
 
 # ================= 1. CẤU HÌNH =================
-st.set_page_config(page_title="AI Hospital (Supabase Ultimate)", page_icon="💎", layout="wide")
+st.set_page_config(page_title="AI Hospital (V28.3 - Fixed)", page_icon="💎", layout="wide")
 
 st.markdown("""
 <style>
@@ -77,7 +77,7 @@ def upload_image(img_cv, filename):
         supabase.storage.from_(bucket).upload(filename, buffer.tobytes(), {"content-type": "image/jpeg", "upsert": "true"})
         return supabase.storage.from_(bucket).get_public_url(filename)
     except Exception as e:
-        # Nếu lỗi (ví dụ file đã tồn tại), cố gắng lấy URL public
+        # Fallback: Lấy URL nếu file đã tồn tại
         try: return supabase.storage.from_("xray_images").get_public_url(filename)
         except: return None
 
@@ -141,14 +141,8 @@ def read_dicom_image(file_buffer):
         return img_rgb, f"{p_name} ({p_id})"
     except: return None, "Lỗi DICOM"
 
-def get_finding_text(disease, conf, location):
-    pct = conf * 100
-    if pct > 75: return "danger", f"{location}: {disease} ({pct:.0f}%)"
-    return "warn", f"{location}: Nghi ngờ {disease} ({pct:.0f}%)"
-
-# --- YOLO PROCESS & SAVE ---
+# --- PROCESS & SAVE (FIXED) ---
 def process_and_save(image_file):
-    # --- SỬA LỖI VALUE ERROR: Đảm bảo luôn trả về 4 giá trị ---
     if "ANATOMY" not in MODELS: 
         return None, {"Error": "Chưa tải được Model AI (Anatomy)"}, False, None
     
@@ -156,20 +150,27 @@ def process_and_save(image_file):
     filename = image_file.name.lower()
     img_rgb, patient_info = None, "Ẩn danh"
     
+    # 1. Reset con trỏ file (Fix lỗi đọc file rỗng)
+    image_file.seek(0)
+    
     if filename.endswith(('.dcm', '.dicom')):
         img_rgb, p_info = read_dicom_image(image_file)
         if img_rgb is None: 
             return None, {"Error": f"Lỗi đọc DICOM: {p_info}"}, False, None
         patient_info = p_info
     else:
+        # Đọc ảnh thường
         file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
+        if file_bytes.size == 0:
+            return None, {"Error": "File ảnh rỗng!"}, False, None
+            
         img_cv = cv2.imdecode(file_bytes, 1)
+        if img_cv is None:
+            return None, {"Error": "OpenCV không đọc được ảnh này (Corrupted/Unsupported)"}, False, None
+            
         img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
     
-    if img_rgb is None:
-        return None, {"Error": "Không đọc được file ảnh"}, False, None
-
-    # Resize để xử lý nhanh
+    # Resize
     h, w = img_rgb.shape[:2]
     scale = 1280 / max(h, w)
     img_resized = cv2.resize(img_rgb, (int(w*scale), int(h*scale)))
@@ -180,42 +181,42 @@ def process_and_save(image_file):
     has_danger = False
     img_bgr = cv2.cvtColor(img_resized, cv2.COLOR_RGB2BGR)
     
-    anatomy_res = MODELS["ANATOMY"](img_bgr, conf=0.35, verbose=False)[0]
-    for box in anatomy_res.boxes:
-        coords = box.xyxy[0].cpu().numpy().astype(int)
-        cls_id = int(box.cls[0])
-        region = anatomy_res.names[cls_id]
-        x1, y1, x2, y2 = coords
-        
-        # Cắt vùng quan tâm (ROI)
-        roi = img_bgr[max(0, y1-40):min(h, y2+40), max(0, x1-40):min(w, x2+40)]
-        if roi.size == 0: continue
-        
-        target_models = []
-        if "Lung" in region: target_models = ["PNEUMOTHORAX", "EFFUSION", "PNEUMONIA", "TUMOR"]
-        elif "Heart" in region: target_models = ["HEART"]
-        
-        for spec in target_models:
-            if spec in MODELS:
-                res = MODELS[spec](roi, verbose=False)[0]
-                if res.probs.top1conf.item() > 0.6 and res.names[res.probs.top1] == "Disease":
-                    pct = res.probs.top1conf.item() * 100
-                    if pct > 75: has_danger = True
-                    text = f"{region}: {spec} ({pct:.0f}%)"
-                    
-                    if "HEART" in spec: findings_db["Heart"].append(text)
-                    elif "PLEURA" in spec or "EFFUSION" in spec: findings_db["Pleura"].append(text)
-                    else: findings_db["Lung"].append(text)
-                    
-                    color = (255, 0, 0) if pct > 75 else (0, 165, 255)
-                    cv2.rectangle(display_img, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(display_img, spec[:4], (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    try:
+        anatomy_res = MODELS["ANATOMY"](img_bgr, conf=0.35, verbose=False)[0]
+        for box in anatomy_res.boxes:
+            coords = box.xyxy[0].cpu().numpy().astype(int)
+            cls_id = int(box.cls[0])
+            region = anatomy_res.names[cls_id]
+            x1, y1, x2, y2 = coords
+            
+            roi = img_bgr[max(0, y1-40):min(h, y2+40), max(0, x1-40):min(w, x2+40)]
+            if roi.size == 0: continue
+            
+            target_models = []
+            if "Lung" in region: target_models = ["PNEUMOTHORAX", "EFFUSION", "PNEUMONIA", "TUMOR"]
+            elif "Heart" in region: target_models = ["HEART"]
+            
+            for spec in target_models:
+                if spec in MODELS:
+                    res = MODELS[spec](roi, verbose=False)[0]
+                    if res.probs.top1conf.item() > 0.6 and res.names[res.probs.top1] == "Disease":
+                        pct = res.probs.top1conf.item() * 100
+                        if pct > 75: has_danger = True
+                        text = f"{region}: {spec} ({pct:.0f}%)"
+                        
+                        if "HEART" in spec: findings_db["Heart"].append(text)
+                        elif "PLEURA" in spec or "EFFUSION" in spec: findings_db["Pleura"].append(text)
+                        else: findings_db["Lung"].append(text)
+                        
+                        color = (255, 0, 0) if pct > 75 else (0, 165, 255)
+                        cv2.rectangle(display_img, (x1, y1), (x2, y2), color, 2)
+                        cv2.putText(display_img, spec[:4], (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    except Exception as e:
+        return None, {"Error": f"Lỗi khi chạy Model YOLO: {str(e)}"}, False, None
 
-    # UPLOAD & SAVE TO SUPABASE
+    # UPLOAD & SAVE
     img_id = datetime.now().strftime("%d%m%Y%H%M%S")
     file_name = f"XRAY_{img_id}.jpg"
-    
-    # Upload ảnh lên Storage
     img_url = upload_image(display_img, file_name)
     
     if img_url:
@@ -230,8 +231,10 @@ def process_and_save(image_file):
             "feedback_2": "Chưa đánh giá"
         }
         save_log(data)
-    
-    # TRẢ VỀ ĐÚNG 4 GIÁ TRỊ
+    else:
+        # Nếu không upload được ảnh thì vẫn trả về để xem, nhưng báo lỗi
+        return display_img, {"Error": "Không upload được ảnh lên Supabase (Kiểm tra lại Bucket Name hoặc Key)"}, has_danger, img_id
+        
     return display_img, findings_db, has_danger, img_id
 
 # ================= 3. GIAO DIỆN CHÍNH =================
@@ -253,26 +256,27 @@ if mode == "🔍 Upload & Phân Tích":
                     
                     if img_out is not None:
                         st.image(img_out, caption=f"ID: {img_id}", use_container_width=True)
-                        if danger: st.error("🔴 PHÁT HIỆN BẤT THƯỜNG")
-                        else: st.success("✅ HÌNH ẢNH BÌNH THƯỜNG")
                         
-                        # Hiển thị chi tiết lỗi nếu có (dạng dict từ findings)
+                        # Xử lý hiển thị lỗi chi tiết
                         if isinstance(findings, dict) and "Error" in findings:
-                            st.error(findings["Error"])
+                            st.error(f"⚠️ {findings['Error']}")
                         else:
+                            if danger: st.error("🔴 PHÁT HIỆN BẤT THƯỜNG")
+                            else: st.success("✅ HÌNH ẢNH BÌNH THƯỜNG")
                             st.json(findings)
                             st.toast("Đã lưu vào Cloud!", icon="☁️")
                     else:
-                        st.error("Không thể xử lý ảnh.")
+                        # Nếu img_out là None, findings sẽ chứa thông báo lỗi
+                        err_msg = findings.get("Error", "Lỗi không xác định") if isinstance(findings, dict) else "Lỗi xử lý ảnh."
+                        st.error(f"❌ {err_msg}")
 
 elif mode == "📂 Hội Chẩn & Labeling":
     st.title("📂 DATA LABELING (SUPABASE)")
-    
     if "sent_prompt" not in st.session_state: st.session_state["sent_prompt"] = ""
     
     df = get_logs()
     if not df.empty:
-        df = df.fillna("") # Fix lỗi NaN
+        df = df.fillna("")
         selected_id = st.selectbox("👉 Chọn Ca bệnh:", df['id'].unique())
         if selected_id:
             record = df[df["id"] == selected_id].iloc[0]
@@ -280,7 +284,6 @@ elif mode == "📂 Hội Chẩn & Labeling":
             with c1:
                 if record.get('image_url'):
                     st.image(record['image_url'], use_container_width=True)
-                    # Load PIL
                     try:
                         import requests
                         from io import BytesIO
@@ -292,7 +295,6 @@ elif mode == "📂 Hội Chẩn & Labeling":
                 st.info(f"BN: {record.get('patient_info')}")
                 st.warning(f"AI YOLO: {record.get('result')}")
                 
-                # INPUT FIELDS
                 ctx = st.text_area("🏥 Bệnh cảnh:", value=record.get("clinical_context") or "", height=70)
                 note = st.text_area("👨‍⚕️ Ý kiến chuyên gia:", value=record.get("expert_note") or "", height=70)
                 guide = st.text_area("🤖 Dẫn dắt Prompt:", value=record.get("prompt_guidance") or "", height=70)
@@ -301,7 +303,6 @@ elif mode == "📂 Hội Chẩn & Labeling":
                 def_tags = [t.strip() for t in tags_str.split(";")] if tags_str else []
                 tags = st.multiselect("⚙️ QA/QC:", TECHNICAL_OPTS, default=def_tags)
                 
-                # GEMINI
                 gemini_lbls, gemini_txt, used_model = [], "", ""
                 if api_key and pil_img and st.button("🧠 Hỏi Gemini"):
                     with st.spinner("Gemini đang nghĩ..."):
@@ -314,18 +315,15 @@ elif mode == "📂 Hội Chẩn & Labeling":
                         if gemini_lbls: st.success(f"Gợi ý: {', '.join(gemini_lbls)}")
                         else: st.error(gemini_txt)
 
-                # RATING & PROMPT
                 cur_prompt = st.session_state["sent_prompt"] or record.get("full_prompt", "")
                 if cur_prompt:
                     with st.expander("Debug Prompt"): st.code(cur_prompt)
-                    
                     saved_rating = record.get("prompt_rating", "Khá")
                     rating_opts = ["Tệ", "TB", "Khá", "Tốt", "Xuất sắc"]
                     val = saved_rating if saved_rating in rating_opts else "Khá"
                     rating = st.select_slider("🌟 Đánh giá Prompt:", options=rating_opts, value=val)
                 else: rating = "Khá"
 
-                # SAVE
                 st.markdown("---")
                 fb1 = str(record.get("feedback_1") or "")
                 
