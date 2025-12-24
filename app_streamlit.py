@@ -16,7 +16,7 @@ import google.generativeai as genai
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital (V23.4 - Auto Discovery)",
+    page_title="AI Hospital (V24.2 - Optimized Flow)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -27,11 +27,13 @@ st.markdown("""
 <style>
     .main { background-color: #f4f6f9; }
     .report-container { background-color: white; padding: 40px; border-radius: 5px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); font-family: 'Times New Roman', serif; color: #000; font-size: 16px; line-height: 1.5; }
-    .hospital-header { text-align: center; border-bottom: 2px solid #002f6c; padding-bottom: 10px; margin-bottom: 20px; }
-    .section-header { background-color: #eee; padding: 8px; border-left: 5px solid #002f6c; margin: 20px 0 15px 0; font-weight: bold; color: #002f6c; text-transform: uppercase; }
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 45px; }
     .gemini-box { background-color: #e3f2fd; padding: 15px; border-radius: 5px; border-left: 5px solid #1976d2; margin: 10px 0; }
     .info-table td { padding: 4px 2px; vertical-align: top; }
+    
+    /* Tinh chỉnh Text Area */
+    .stTextArea textarea { font-size: 14px; background-color: #f8f9fa; }
+    .step-badge { background-color: #002f6c; color: white; padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; margin-bottom: 10px; display: inline-block; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -45,8 +47,11 @@ TRAIN_DATA_DIR = os.path.join(BASE_PATH, "dataset_yolo_ready")
 
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
-REQUIRED_COLUMNS = ["ID", "Time", "Result", "Details", "Image_Path", "Patient_Info", 
-                    "Feedback_1", "Label_1", "Feedback_2", "Label_2", "AI_Reasoning"]
+REQUIRED_COLUMNS = [
+    "ID", "Time", "Result", "Details", "Image_Path", "Patient_Info", 
+    "Feedback_1", "Label_1", "Feedback_2", "Label_2", "AI_Reasoning",
+    "Clinical_Context", "Expert_Note", "Technical_Tags"
+]
 
 if not os.path.exists(LOG_FILE):
     pd.DataFrame(columns=REQUIRED_COLUMNS).to_csv(LOG_FILE, index=False)
@@ -60,6 +65,15 @@ else:
                 changed = True
         if changed: df_check.to_csv(LOG_FILE, index=False)
     except: pass
+
+TECHNICAL_TAGS = [
+    "⚠️ Dương tính giả (AI báo sai)", "⚠️ Âm tính giả (AI bỏ sót)",
+    "📷 Hít vào không đủ sâu", "📷 Bệnh nhân xoay/lệch",
+    "📷 Cường độ tia không đạt", "📷 Dị vật/Áo ngực",
+    "📷 Mất góc sườn hoành", "🧠 Ca khó/Không điển hình",
+    "🧠 Nhiễu ảnh mờ chồng hình", "✅ Phim đạt chuẩn kỹ thuật",
+    "❌ Phim hỏng"
+]
 
 LABEL_MAP = {
     "Bình thường (Normal)": "Normal", "Bóng tim to (Cardiomegaly)": "Cardiomegaly",
@@ -90,59 +104,69 @@ def load_models():
 
 MODELS, MODEL_STATUS, DEVICE = load_models()
 
-# --- HÀM GỌI GEMINI THÔNG MINH (AUTO-DISCOVERY) ---
-def ask_gemini_for_label(api_key, image_path, clinical_info=""):
+# --- HÀM GỌI GEMINI (GỘP TẤT CẢ INPUT) ---
+def ask_gemini_for_label(api_key, image_path, context="", expert_note="", prompt_guidance=""):
     try:
         genai.configure(api_key=api_key)
+        
+        priority_models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"]
         img = Image.open(image_path)
         labels_str = ", ".join([f"'{l}'" for l in ALLOWED_LABELS])
-        prompt = f"Bạn là BS chẩn đoán hình ảnh. Lâm sàng: {clinical_info}. Xem ảnh X-quang và chẩn đoán theo danh sách: [{labels_str}]. Output JSON: {{'labels': [], 'reasoning': ''}}"
         
-        # 1. Thử danh sách chuẩn trước (Nhanh nhất)
-        priority_models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"]
+        # --- CẤU TRÚC PROMPT MỚI (Đưa Prompt người dùng xuống cuối) ---
+        final_prompt = f"""
+        Vai trò: Bác sĩ chẩn đoán hình ảnh chuyên sâu (Senior Radiologist).
+        
+        ==== DỮ LIỆU ĐẦU VÀO ====
+        1. BỆNH CẢNH LÂM SÀNG (CONTEXT):
+        "{context if context else 'Không có'}"
+        
+        2. Ý KIẾN CHUYÊN GIA/GHI CHÚ BAN ĐẦU (EXPERT NOTE):
+        "{expert_note if expert_note else 'Không có'}"
+        
+        3. YÊU CẦU CỤ THỂ/DẪN DẮT (USER PROMPT):
+        "{prompt_guidance if prompt_guidance else 'Phân tích tổng quát theo quy trình chuẩn.'}"
+        
+        ==== NHIỆM VỤ ====
+        - Phân tích hình ảnh X-quang dựa trên toàn bộ thông tin trên.
+        - Chọn nhãn bệnh lý chính xác từ danh sách: [{labels_str}].
+        - Nếu bình thường, chọn 'Bình thường (Normal)'.
+        
+        Output JSON: {{
+            "labels": ["Label1", "Label2"],
+            "reasoning": "Biện luận chi tiết bằng tiếng Việt."
+        }}
+        """
         
         last_error = ""
         for m_name in priority_models:
             try:
                 model = genai.GenerativeModel(m_name)
-                response = model.generate_content([prompt, img], generation_config={"response_mime_type": "application/json"})
+                response = model.generate_content([final_prompt, img], generation_config={"response_mime_type": "application/json"})
                 res_json = json.loads(response.text)
                 res_json["used_model"] = m_name
+                res_json["sent_prompt"] = final_prompt
                 return res_json
             except Exception as e:
                 last_error = str(e)
                 continue
-
-        # 2. Nếu thất bại, tự động dò tìm model khả dụng trong tài khoản
+        
+        # Fallback
         try:
-            available_models = []
             for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    available_models.append(m.name)
-            
-            # Thử model đầu tiên tìm thấy hỗ trợ vision (thường là cái mới nhất)
-            if available_models:
-                # Ưu tiên model có chữ 'flash' hoặc 'pro' hoặc 'vision'
-                best_model = available_models[0] 
-                for m in available_models:
-                    if 'flash' in m or 'pro' in m:
-                        best_model = m
-                        break
-                
-                model = genai.GenerativeModel(best_model)
-                response = model.generate_content([prompt, img], generation_config={"response_mime_type": "application/json"})
-                res_json = json.loads(response.text)
-                res_json["used_model"] = best_model
-                return res_json
-                
-            else:
-                return {"labels": [], "reasoning": f"Tài khoản Key này không có quyền truy cập model nào cả. (Error: {last_error})"}
-
-        except Exception as scan_error:
-             return {"labels": [], "reasoning": f"Không tìm thấy model phù hợp. Danh sách model khả dụng: {str(available_models) if 'available_models' in locals() else 'Không lấy được'}. Lỗi gốc: {last_error}"}
+                if 'generateContent' in m.supported_generation_methods and ('flash' in m.name or 'pro' in m.name):
+                    model = genai.GenerativeModel(m.name)
+                    response = model.generate_content([final_prompt, img], generation_config={"response_mime_type": "application/json"})
+                    res_json = json.loads(response.text)
+                    res_json["used_model"] = m.name
+                    res_json["sent_prompt"] = final_prompt
+                    return res_json
+        except: pass
+        
+        return {"labels": [], "reasoning": f"Lỗi Gemini: {last_error}", "sent_prompt": final_prompt}
 
     except Exception as e:
-        return {"labels": [], "reasoning": f"Lỗi nghiêm trọng: {str(e)}"}
+        return {"labels": [], "reasoning": f"Lỗi hệ thống: {str(e)}", "sent_prompt": ""}
 
 def read_dicom_image(file_buffer):
     try:
@@ -190,7 +214,8 @@ def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
         "ID": img_id, "Time": datetime.now().strftime("%d/%m/%Y %H:%M"), 
         "Result": result, "Details": details, "Image_Path": file_name, 
         "Patient_Info": patient_info, 
-        "Feedback_1": "Chưa đánh giá", "Label_1": "", "Feedback_2": "Chưa đánh giá", "Label_2": "", "AI_Reasoning": ""
+        "Feedback_1": "Chưa đánh giá", "Label_1": "", "Feedback_2": "Chưa đánh giá", "Label_2": "", "AI_Reasoning": "",
+        "Clinical_Context": "", "Expert_Note": "", "Technical_Tags": ""
     }
     try:
         df = pd.read_csv(LOG_FILE)
@@ -199,7 +224,7 @@ def save_case(img_cv, findings_db, has_danger, patient_info="N/A"):
     except: pass
     return img_id
 
-def update_feedback_slot(selected_id, feedback_value, label_value, slot, ai_reason=""):
+def update_feedback_slot(selected_id, feedback_value, label_value, slot, ai_reason="", context="", note="", tags=""):
     try:
         df = pd.read_csv(LOG_FILE)
         df = df.fillna("")
@@ -211,7 +236,12 @@ def update_feedback_slot(selected_id, feedback_value, label_value, slot, ai_reas
         elif slot == 2:
             df.loc[df["ID"] == selected_id, "Feedback_2"] = feedback_value
             df.loc[df["ID"] == selected_id, "Label_2"] = label_value
+        
         if ai_reason: df.loc[df["ID"] == selected_id, "AI_Reasoning"] = ai_reason
+        if context: df.loc[df["ID"] == selected_id, "Clinical_Context"] = context
+        if note: df.loc[df["ID"] == selected_id, "Expert_Note"] = note
+        if tags: df.loc[df["ID"] == selected_id, "Technical_Tags"] = tags
+            
         df.to_csv(LOG_FILE, index=False)
         return True
     except: return False
@@ -243,7 +273,7 @@ def preview_auto_label(df_selected):
             cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(img, f"{label_name}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
     final_label = get_final_label(random_row)
-    msg = f"🖼️ **File:** {random_row['Image_Path']} | 🏆 **Nhãn chốt:** {final_label} | 🤖 **Anatomy:** {', '.join(set(detected_classes))}"
+    msg = f"🖼️ **File:** {random_row['Image_Path']} | 🏆 **Nhãn:** {final_label}"
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB), msg
 
 def export_selected_data(df_selected, use_anatomy_auto_label=True):
@@ -287,7 +317,6 @@ def export_selected_data(df_selected, use_anatomy_auto_label=True):
     shutil.make_archive(TRAIN_DATA_DIR, 'zip', TRAIN_DATA_DIR)
     return f"Đã xuất {count} ảnh!", f"{TRAIN_DATA_DIR}.zip"
 
-# --- HÀM PHÂN TÍCH YOLO ---
 def process_image_yolo(image_file):
     if "ANATOMY" not in MODELS: return None, "Thiếu Anatomy", False, 0, "", ""
     start_t = time.time()
@@ -301,7 +330,6 @@ def process_image_yolo(image_file):
         file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
         img_cv = cv2.imdecode(file_bytes, 1)
         img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
-    
     if img_rgb is None: return None, "Lỗi file ảnh", False, 0, "", ""
     h, w = img_rgb.shape[:2]
     scale = 1280 / max(h, w)
@@ -311,10 +339,8 @@ def process_image_yolo(image_file):
     has_danger = False
     PRIORITY = ["PNEUMOTHORAX", "EFFUSION", "TUMOR", "PNEUMONIA"] 
     SECONDARY = ["OPACITY"]
-    
     img_bgr = cv2.cvtColor(img_resized, cv2.COLOR_RGB2BGR)
     anatomy_res = MODELS["ANATOMY"](img_bgr, conf=0.35, iou=0.45, verbose=False)[0]
-    
     for box in anatomy_res.boxes:
         coords = box.xyxy[0].cpu().numpy().astype(int)
         cls_id = int(box.cls[0])
@@ -345,7 +371,6 @@ def process_image_yolo(image_file):
                     color = (255, 0, 0) if level == "danger" else (255, 165, 0)
                     cv2.rectangle(display_img, (x1, y1), (x2, y2), color, 2)
                     cv2.putText(display_img, spec[:4], (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    
     img_id = save_case(display_img, findings_db, has_danger, patient_info)
     return display_img, findings_db, has_danger, time.time() - start_t, patient_info, img_id
 
@@ -369,11 +394,8 @@ def generate_html_report(findings_db, has_danger, patient_info, img_id):
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3063/3063176.png", width=60)
     st.title("ĐIỀU KHIỂN")
-    
-    # Auto-load Key
     default_key = st.secrets.get("GEMINI_API_KEY", "")
     api_key = st.text_input("🔑 Gemini API Key:", value=default_key, type="password", help="Nhập Key để dùng tính năng AI Teacher")
-    
     mode = st.radio("Chức năng:", ["🔍 Phân Tích & Upload", "📂 Hội Chẩn (AI Teacher)", "🛠️ Xuất Dataset"])
     st.divider()
     with st.expander("Trạng thái Model AI"):
@@ -402,8 +424,7 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
     st.title("📂 HỘI CHẨN & AI GÁN NHÃN")
     if os.path.exists(LOG_FILE):
         df = pd.read_csv(LOG_FILE)
-        df = df.fillna("") # QUAN TRỌNG: SỬA LỖI CRASH
-        
+        df = df.fillna("")
         df['ID'] = df['ID'].astype(str)
         df = df.iloc[::-1]
         id_list = df["ID"].unique()
@@ -419,33 +440,55 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                 st.warning(f"AI Kết luận: {record['Result']}")
                 st.markdown("---")
                 
-                gemini_labels, gemini_reason = [], ""
-                clinical_input = st.text_input("💬 Thông tin lâm sàng (Gửi kèm cho AI):", placeholder="Ví dụ: Ho ra máu, sốt về chiều...")
+                # --- PHẦN 1: THÔNG TIN NHẬP LIỆU ---
+                st.markdown("#### 1. DỮ LIỆU ĐẦU VÀO")
+                
+                old_ctx = str(record.get("Clinical_Context", ""))
+                clinical_context = st.text_area("🏥 Bệnh cảnh lâm sàng (Tiền sử, triệu chứng):", value=old_ctx, height=70)
+                
+                old_note = str(record.get("Expert_Note", ""))
+                expert_note = st.text_area("👨‍⚕️ Ý kiến chuyên gia (Ghi chú ban đầu):", value=old_note, height=70)
+                
+                clinical_guidance = st.text_area("🤖 Dẫn dắt AI (Prompt cuối cùng):", placeholder="Ví dụ: Tập trung phân tích vùng rốn phổi...", height=70)
+                
+                gemini_labels, gemini_reason, used_model, sent_prompt = [], "", "", ""
                 
                 if api_key:
                     if st.button("🧠 Xin ý kiến Gemini (Auto-Label)"):
-                        with st.spinner("Gemini đang phân tích (Đang thử nhiều model)..."):
-                            res = ask_gemini_for_label(api_key, img_path, clinical_input)
+                        with st.spinner("Gemini đang phân tích (Kết hợp Bệnh cảnh + Ý kiến chuyên gia + Dẫn dắt)..."):
+                            # Gửi cả 3 trường dữ liệu sang hàm xử lý
+                            res = ask_gemini_for_label(api_key, img_path, clinical_context, expert_note, clinical_guidance)
                             gemini_labels = res.get("labels", [])
                             gemini_reason = res.get("reasoning", "")
-                            used_model = res.get("used_model", "Không rõ")
+                            used_model = res.get("used_model", "Unknown")
+                            sent_prompt = res.get("sent_prompt", "")
                             
                             if gemini_labels:
-                                st.markdown(f'<div class="gemini-box"><b>🤖 Gemini Gợi ý (Model: {used_model}):</b> {", ".join(gemini_labels)}<br><i>"{gemini_reason}"</i></div>', unsafe_allow_html=True)
+                                with st.expander("🔌 Debug: Xem nội dung Prompt đã gửi đi"):
+                                    st.text(sent_prompt)
+                                st.markdown(f'<div class="gemini-box"><b>🤖 Gemini Gợi ý ({used_model}):</b> {", ".join(gemini_labels)}<br><i>"{gemini_reason}"</i></div>', unsafe_allow_html=True)
                             else:
-                                err_msg = gemini_reason if gemini_reason else "Không xác định."
-                                st.error(f"⚠️ Lỗi Gemini: {err_msg}")
-                else: st.info("💡 Nhập Gemini API Key để dùng tính năng gợi ý.")
+                                st.error(f"⚠️ Lỗi Gemini: {gemini_reason}")
+                else: st.info("💡 Nhập Key để dùng tính năng gợi ý.")
 
+                # --- PHẦN 2: ĐÁNH GIÁ KẾT QUẢ ---
+                st.markdown("---")
+                st.markdown("#### 2. KẾT LUẬN & GÁN NHÃN")
+                
                 fb1 = str(record.get("Feedback_1", ""))
                 fb2 = str(record.get("Feedback_2", ""))
                 lb1 = str(record.get("Label_1", ""))
                 lb2 = str(record.get("Label_2", ""))
                 
+                # Tag kỹ thuật
+                old_tags = str(record.get("Technical_Tags", ""))
+                default_tags = [t.strip() for t in old_tags.split(";") if t.strip()] if old_tags else []
+                technical_tags = st.multiselect("⚙️ Điều kiện kỹ thuật (QA/QC):", TECHNICAL_TAGS, default=default_tags)
+                
                 fb_options = ["Chưa đánh giá", "✅ Đồng thuận (Đúng)", "⚠️ Dương tính giả", "⚠️ Âm tính giả"]
                 
                 if fb1 == "Chưa đánh giá" or fb1 == "":
-                    st.markdown('**🔹 ĐÁNH GIÁ LẦN 1**')
+                    st.markdown('<div class="step-badge">🔹 ĐÁNH GIÁ LẦN 1</div>', unsafe_allow_html=True)
                     default_labels = gemini_labels if gemini_labels else ([l for l in lb1.split("; ") if l])
                     valid_defaults = [l for l in default_labels if l in ALLOWED_LABELS]
                     
@@ -453,12 +496,14 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                     new_lbl1 = st.multiselect("Bệnh lý xác định (BS 1):", ALLOWED_LABELS, default=valid_defaults)
                     
                     if st.button("💾 LƯU LẦN 1"):
-                        update_feedback_slot(selected_id, new_fb1, "; ".join(new_lbl1), 1, gemini_reason)
+                        tags_str = "; ".join(technical_tags)
+                        # Lưu luôn cả Expert Note và Context vào CSV
+                        update_feedback_slot(selected_id, new_fb1, "; ".join(new_lbl1), 1, gemini_reason, clinical_context, expert_note, tags_str)
                         st.success("Đã lưu Lần 1!"); time.sleep(0.5); st.rerun()
                 
                 elif fb2 == "Chưa đánh giá" or fb2 == "":
-                    st.markdown(f'👤 **Lần 1:** {fb1} ({lb1})')
-                    st.markdown('**🔸 ĐÁNH GIÁ LẦN 2 (CHỐT)**')
+                    st.markdown(f'<div style="background:#eee; padding:10px; margin-bottom:10px;">👤 <b>Lần 1:</b> {fb1} ({lb1})</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="step-badge" style="background:#c62828;">🔸 ĐÁNH GIÁ LẦN 2 (CHỐT)</div>', unsafe_allow_html=True)
                     
                     default_labels = [l for l in lb2.split("; ") if l] if lb2 else ([l for l in lb1.split("; ") if l])
                     valid_defaults = [l for l in default_labels if l in ALLOWED_LABELS]
@@ -467,7 +512,8 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                     new_lbl2 = st.multiselect("Bệnh lý xác định (BS 2):", ALLOWED_LABELS, default=valid_defaults)
                     
                     if st.button("💾 LƯU LẦN 2 (CHỐT)"):
-                        update_feedback_slot(selected_id, new_fb2, "; ".join(new_lbl2), 2, gemini_reason)
+                        tags_str = "; ".join(technical_tags)
+                        update_feedback_slot(selected_id, new_fb2, "; ".join(new_lbl2), 2, gemini_reason, clinical_context, expert_note, tags_str)
                         st.success("Đã lưu Lần 2!"); time.sleep(0.5); st.rerun()
                 
                 else:
@@ -490,7 +536,7 @@ elif mode == "🛠️ Xuất Dataset":
                 df["Final_Label"] = df.apply(get_final_label, axis=1)
                 df["Select"] = False
                 st.write("### 📋 Chọn ca để xuất dữ liệu:")
-                df_editor = st.data_editor(df[["Select", "ID", "Patient_Info", "Label_1", "Label_2", "Final_Label"]], column_config={"Select": st.column_config.CheckboxColumn("Chọn", default=False)}, hide_index=True, use_container_width=True)
+                df_editor = st.data_editor(df[["Select", "ID", "Patient_Info", "Label_1", "Label_2", "Final_Label", "Technical_Tags"]], column_config={"Select": st.column_config.CheckboxColumn("Chọn", default=False)}, hide_index=True, use_container_width=True)
                 selected_rows = df_editor[df_editor["Select"] == True]
                 df_final = df.iloc[selected_rows.index]
                 st.write(f"Đang chọn: **{len(df_final)}** ca.")
