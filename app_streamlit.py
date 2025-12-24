@@ -27,13 +27,28 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- KẾT NỐI SUPABASE ---
+# --- KẾT NỐI SUPABASE (DEBUG MODE) ---
 @st.cache_resource
 def init_supabase():
+    # 1. Kiểm tra xem file secrets có tồn tại và đúng mục không
+    if "supabase" not in st.secrets:
+        st.error("⛔ LỖI CẤU HÌNH: Không tìm thấy mục [supabase] trong secrets.toml")
+        st.stop()
+        
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
+        
+        # 2. Kiểm tra dữ liệu rỗng
+        if not url or "http" not in url:
+            st.error("⛔ LỖI URL: URL Supabase bị trống hoặc sai định dạng.")
+            st.stop()
+            
         return create_client(url, key)
-    except: return None
+        
+    except Exception as e:
+        st.error(f"⛔ LỖI KẾT NỐI SUPABASE: {str(e)}")
+        return None
 
 supabase = init_supabase()
 
