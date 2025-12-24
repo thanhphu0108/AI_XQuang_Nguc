@@ -17,11 +17,11 @@ import requests
 from io import BytesIO
 
 # ================= 1. CẤU HÌNH & CSS =================
-st.set_page_config(page_title="AI Hospital (V32.1 - Auto Smart)", page_icon="🇻🇳", layout="wide")
+st.set_page_config(page_title="AI Hospital (V32.2 - Stable Fix)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
-    .main { background-color: #e9ecef; }
+    .main { background-color: #f8f9fa; }
     .a4-paper {
         background-color: white; width: 100%; max-width: 800px; margin: 0 auto; padding: 40px;
         box-shadow: 0 4px 10px rgba(0,0,0,0.1); font-family: 'Times New Roman', serif; color: #000; border: 1px solid #ccc;
@@ -30,16 +30,16 @@ st.markdown("""
     .hospital-header h1 { margin: 0; font-size: 22px; text-transform: uppercase; font-weight: bold; color: #002f6c; }
     .info-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
     .info-table td { padding: 5px; border-bottom: 1px dotted #999; vertical-align: bottom; }
-    .section-title { background-color: #f0f2f5; font-weight: bold; padding: 8px; margin-top: 20px; border-left: 4px solid #002f6c; text-transform: uppercase; font-size: 14px; }
+    .section-title { background-color: #e3f2fd; font-weight: bold; padding: 8px; margin-top: 20px; border-left: 4px solid #002f6c; text-transform: uppercase; font-size: 14px; }
     .conclusion-box { border: 2px solid #333; padding: 15px; margin-top: 20px; text-align: center; font-weight: bold; }
     .stButton>button { width: 100%; font-weight: bold; height: 45px; }
-    .step-badge { background-color: #002f6c; color: white; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; display: inline-block; margin-bottom: 10px; }
     
+    /* Highlight radio */
     div[role="radiogroup"] > label > div:first-child { background-color: #e3f2fd; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- TỪ ĐIỂN & BIẾN TOÀN CỤC (Đã fix lỗi NameError) ---
+# --- TỪ ĐIỂN ---
 ALLOWED_LABELS = ["Normal", "Cardiomegaly", "Pneumonia", "Effusion", "Pneumothorax", "Nodule_Mass", "Fibrosis_TB", "Fracture", "Pleural_Thickening", "Other"]
 
 LABEL_MAP = {
@@ -72,7 +72,6 @@ def init_supabase():
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
-        if not url or "http" not in url: return None
         return create_client(url, key)
     except: return None
 
@@ -130,16 +129,19 @@ def get_logs():
         return pd.DataFrame(response.data)
     except: return pd.DataFrame()
 
-# --- GEMINI (AUTO SMART SELECT V32.0) ---
+# --- GEMINI (V32.2 - PHỤC HỒI STABLE) ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
-    if not api_key: return {}
-    try: genai.configure(api_key=api_key)
-    except: return {"labels": [], "reasoning": "Sai API Key"}
+    if not api_key: return {"labels": [], "reasoning": "Thiếu API Key"}
+    
+    try: 
+        genai.configure(api_key=api_key)
+    except: 
+        return {"labels": [], "reasoning": "API Key không hợp lệ"}
 
-    # DANH SÁCH MỤC TIÊU (Ưu tiên từ Xịn -> Nhanh)
-    model_priority = ["gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"]
+    # DANH SÁCH MODEL ỔN ĐỊNH (Bỏ bản Exp gây lỗi)
+    model_priority = ["gemini-1.5-flash", "gemini-1.5-pro"]
 
-    labels_str = ", ".join(ALLOWED_LABELS) # Dùng list tiếng Anh để AI hiểu chuẩn
+    labels_str = ", ".join(ALLOWED_LABELS) 
     tech_note = ", ".join(tags) if tags else "Chuẩn."
     
     prompt = f"""
@@ -158,10 +160,15 @@ def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
             result["used_model"] = model_name
             return result
         except Exception as e:
-            last_error = str(e)
+            last_error = str(e) # Lưu lỗi để debug
             continue 
 
-    return {"labels": [], "reasoning": f"Lỗi hệ thống Gemini: {last_error}", "used_model": "Failed"}
+    # NẾU THẤT BẠI, TRẢ VỀ LỖI CHI TIẾT ĐỂ HIỆN LÊN MÀN HÌNH
+    return {
+        "labels": [], 
+        "reasoning": f"⚠️ Lỗi kết nối Gemini: {last_error}. (Vui lòng kiểm tra lại API Key hoặc mạng)", 
+        "used_model": "Failed"
+    }
 
 # --- HTML REPORT ---
 def generate_html_report(findings_input, has_danger, patient_info, img_id, gemini_text=""):
@@ -191,7 +198,7 @@ def generate_html_report(findings_input, has_danger, patient_info, img_id, gemin
 
     gemini_block = ""
     if gemini_text:
-        gemini_block = f"""<div style="margin-top:15px; padding:10px; background:#fffde7; border:1px dashed orange; font-style:italic;"><b>🤖 Gemini:</b> {gemini_text}</div>"""
+        gemini_block = f"""<div style="margin-top:15px; padding:10px; background:#fffde7; border:1px dashed orange; font-style:italic;"><b>🤖 Gemini Gợi ý:</b> {gemini_text}</div>"""
 
     html = f"""
     <div class="a4-paper">
@@ -278,7 +285,14 @@ def process_and_save(image_file):
     img_url = upload_image(display_img, f"XRAY_{img_id}.jpg")
     
     if img_url:
-        save_log({"id": img_id, "created_at": datetime.now().isoformat(), "image_url": img_url, "result": "BẤT THƯỜNG" if has_danger else "BÌNH THƯỜNG", "details": str(findings_db), "patient_info": patient_info})
+        save_log({
+            "id": img_id, 
+            "created_at": datetime.now().isoformat(), 
+            "image_url": img_url, 
+            "result": "BẤT THƯỜNG" if has_danger else "BÌNH THƯỜNG", 
+            "details": str(findings_db), 
+            "patient_info": patient_info
+        })
 
     return display_img, findings_db, has_danger, img_id, Image.fromarray(img_resized)
 
@@ -359,30 +373,31 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         def_tags = [t.strip() for t in tags_str.split(";")] if tags_str else []
                         tags = st.multiselect("Đánh giá Kỹ thuật:", TECHNICAL_OPTS, default=def_tags)
                         
-                        # --- NÚT HỎI GEMINI (ĐÃ FIX) ---
-                        if st.button("🧠 Hỏi lại Gemini (Auto Model)"):
+                        # --- NÚT HỎI GEMINI (ỔN ĐỊNH) ---
+                        if st.button("🧠 Hỏi lại Gemini (Model 1.5)"):
                             if not api_key: st.error("⚠️ Thiếu API Key!")
                             elif not pil_img: st.error("⚠️ Không tải được ảnh từ Cloud!")
                             else:
-                                with st.spinner("Đang chạy Gemini 2.0 (hoặc 1.5)..."):
+                                with st.spinner("Đang chạy Gemini 1.5 Flash..."):
                                     res = ask_gemini(api_key, pil_img, ctx, note, guide, tags)
                                     txt = res.get("reasoning", "")
                                     model_used = res.get("used_model", "")
-                                    if txt:
+                                    
+                                    if "Failed" in model_used:
+                                        st.error(txt) # Hiện lỗi chi tiết
+                                    elif txt:
                                         save_log({"id": selected_id, "ai_reasoning": txt})
                                         st.success(f"Đã cập nhật! (Model dùng: {model_used})")
                                         time.sleep(1)
                                         st.rerun()
 
                         st.markdown("---")
-                        # --- PHẦN GÁN NHÃN (LABELING) ---
                         st.markdown("#### 🏷️ Gán nhãn & Kết luận")
                         
                         fb1 = str(record.get("feedback_1") or "Chưa đánh giá")
                         
                         if fb1 == "Chưa đánh giá":
                             st.markdown('<div class="step-badge">VÒNG 1: SƠ BỘ</div>', unsafe_allow_html=True)
-                            
                             new_fb = st.radio("Đánh giá AI:", FEEDBACK_OPTS, index=0)
                             
                             lbl_str = record.get("label_1") or ""
