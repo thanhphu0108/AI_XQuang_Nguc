@@ -16,7 +16,7 @@ import google.generativeai as genai
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital (V24.3 - Tech Context)",
+    page_title="AI Hospital (V24.4 - Stable Output)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -29,10 +29,9 @@ st.markdown("""
     .report-container { background-color: white; padding: 40px; border-radius: 5px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); font-family: 'Times New Roman', serif; color: #000; font-size: 16px; line-height: 1.5; }
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 45px; }
     .gemini-box { background-color: #e3f2fd; padding: 15px; border-radius: 5px; border-left: 5px solid #1976d2; margin: 10px 0; }
+    .step-badge { background-color: #002f6c; color: white; padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; margin-bottom: 10px; display: inline-block; }
     .info-table td { padding: 4px 2px; vertical-align: top; }
     .stTextArea textarea { font-size: 14px; background-color: #f8f9fa; }
-    .step-badge { background-color: #002f6c; color: white; padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; margin-bottom: 10px; display: inline-block; }
-    .qa-box { border: 1px solid #4caf50; padding: 10px; border-radius: 5px; background-color: #f1f8e9; margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,8 +64,6 @@ else:
         if changed: df_check.to_csv(LOG_FILE, index=False)
     except: pass
 
-# --- DANH SÁCH QA/QC TỐI ƯU CHO PROMPT ---
-# (Key để hiển thị, Value là nội dung gửi cho AI)
 TECHNICAL_OPTS = [
     "✅ Phim chuẩn (Standard PA View)",
     "⚠️ Phim chụp tại giường (AP View - Lưu ý tim bè ngang)",
@@ -107,7 +104,7 @@ def load_models():
 
 MODELS, MODEL_STATUS, DEVICE = load_models()
 
-# --- HÀM GỌI GEMINI (FULL INPUT) ---
+# --- HÀM GỌI GEMINI (ĐÃ CHỈNH TEMPERATURE = 0) ---
 def ask_gemini_for_label(api_key, image_path, context="", expert_note="", prompt_guidance="", tech_tags=[]):
     try:
         genai.configure(api_key=api_key)
@@ -115,11 +112,8 @@ def ask_gemini_for_label(api_key, image_path, context="", expert_note="", prompt
         priority_models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"]
         img = Image.open(image_path)
         labels_str = ", ".join([f"'{l}'" for l in ALLOWED_LABELS])
-        
-        # Xử lý tech tags thành văn bản
         tech_note = ", ".join(tech_tags) if tech_tags else "Phim đạt chuẩn kỹ thuật."
         
-        # --- PROMPT TỐI ƯU ---
         final_prompt = f"""
         Vai trò: Bác sĩ chẩn đoán hình ảnh chuyên sâu (Senior Radiologist).
         
@@ -128,9 +122,9 @@ def ask_gemini_for_label(api_key, image_path, context="", expert_note="", prompt
         - GHI CHÚ CHUYÊN GIA (Expert Note): "{expert_note if expert_note else 'Không có'}"
         - HƯỚNG DẪN CỤ THỂ (Guidance): "{prompt_guidance if prompt_guidance else 'Phân tích tổng quát'}"
         
-        ==== 2. ĐIỀU KIỆN KỸ THUẬT (QA/QC) - QUAN TRỌNG ====
+        ==== 2. ĐIỀU KIỆN KỸ THUẬT (QA/QC) ====
         Trạng thái phim: {tech_note}
-        (Lưu ý: Hãy cân nhắc các yếu tố kỹ thuật trên để tránh Dương tính giả/Âm tính giả. Ví dụ: Nếu hít không sâu, đừng đọc vội là tim to hay rốn phổi đậm trừ khi quá rõ ràng).
+        (Cân nhắc các yếu tố kỹ thuật này để tránh Dương tính giả/Âm tính giả).
         
         ==== 3. NHIỆM VỤ ====
         - Phân tích hình ảnh X-quang đính kèm.
@@ -139,15 +133,21 @@ def ask_gemini_for_label(api_key, image_path, context="", expert_note="", prompt
         
         Output JSON: {{
             "labels": ["Label1", "Label2"],
-            "reasoning": "Biện luận chi tiết bằng tiếng Việt, có nhắc đến yếu tố kỹ thuật nếu ảnh hưởng đến chẩn đoán."
+            "reasoning": "Biện luận chi tiết bằng tiếng Việt."
         }}
         """
+        
+        # CẤU HÌNH QUAN TRỌNG: Temperature = 0.0 (Không sáng tạo, ổn định tuyệt đối)
+        gen_config = {
+            "response_mime_type": "application/json",
+            "temperature": 0.0 
+        }
         
         last_error = ""
         for m_name in priority_models:
             try:
                 model = genai.GenerativeModel(m_name)
-                response = model.generate_content([final_prompt, img], generation_config={"response_mime_type": "application/json"})
+                response = model.generate_content([final_prompt, img], generation_config=gen_config)
                 res_json = json.loads(response.text)
                 res_json["used_model"] = m_name
                 res_json["sent_prompt"] = final_prompt
@@ -161,7 +161,7 @@ def ask_gemini_for_label(api_key, image_path, context="", expert_note="", prompt
             for m in genai.list_models():
                 if 'generateContent' in m.supported_generation_methods and ('flash' in m.name or 'pro' in m.name):
                     model = genai.GenerativeModel(m.name)
-                    response = model.generate_content([final_prompt, img], generation_config={"response_mime_type": "application/json"})
+                    response = model.generate_content([final_prompt, img], generation_config=gen_config)
                     res_json = json.loads(response.text)
                     res_json["used_model"] = m.name
                     res_json["sent_prompt"] = final_prompt
@@ -335,6 +335,7 @@ def process_image_yolo(image_file):
         file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
         img_cv = cv2.imdecode(file_bytes, 1)
         img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+    
     if img_rgb is None: return None, "Lỗi file ảnh", False, 0, "", ""
     h, w = img_rgb.shape[:2]
     scale = 1280 / max(h, w)
