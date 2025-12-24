@@ -16,7 +16,7 @@ import google.generativeai as genai
 
 # ================= 1. CẤU HÌNH TRANG WEB =================
 st.set_page_config(
-    page_title="AI Hospital (V24.2 - Optimized Flow)",
+    page_title="AI Hospital (V24.3 - Tech Context)",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -30,10 +30,9 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; height: 45px; }
     .gemini-box { background-color: #e3f2fd; padding: 15px; border-radius: 5px; border-left: 5px solid #1976d2; margin: 10px 0; }
     .info-table td { padding: 4px 2px; vertical-align: top; }
-    
-    /* Tinh chỉnh Text Area */
     .stTextArea textarea { font-size: 14px; background-color: #f8f9fa; }
     .step-badge { background-color: #002f6c; color: white; padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; margin-bottom: 10px; display: inline-block; }
+    .qa-box { border: 1px solid #4caf50; padding: 10px; border-radius: 5px; background-color: #f1f8e9; margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -66,13 +65,17 @@ else:
         if changed: df_check.to_csv(LOG_FILE, index=False)
     except: pass
 
-TECHNICAL_TAGS = [
-    "⚠️ Dương tính giả (AI báo sai)", "⚠️ Âm tính giả (AI bỏ sót)",
-    "📷 Hít vào không đủ sâu", "📷 Bệnh nhân xoay/lệch",
-    "📷 Cường độ tia không đạt", "📷 Dị vật/Áo ngực",
-    "📷 Mất góc sườn hoành", "🧠 Ca khó/Không điển hình",
-    "🧠 Nhiễu ảnh mờ chồng hình", "✅ Phim đạt chuẩn kỹ thuật",
-    "❌ Phim hỏng"
+# --- DANH SÁCH QA/QC TỐI ƯU CHO PROMPT ---
+# (Key để hiển thị, Value là nội dung gửi cho AI)
+TECHNICAL_OPTS = [
+    "✅ Phim chuẩn (Standard PA View)",
+    "⚠️ Phim chụp tại giường (AP View - Lưu ý tim bè ngang)",
+    "⚠️ Hít vào không đủ sâu (Low Inspiration - Dễ nhầm rốn phổi đậm)",
+    "⚠️ Bệnh nhân xoay lệch (Rotation - Lưu ý khí quản lệch giả)",
+    "⚠️ Cường độ tia quá cứng (Overexposure - Dễ bỏ sót mờ nhạt)",
+    "⚠️ Cường độ tia quá mềm (Underexposure - Phổi trắng giả tạo)",
+    "⚠️ Dị vật/Dây điện cực/Áo (Artifacts - Loại trừ tổn thương)",
+    "⚠️ Mất góc sườn hoành (Cropped - Không đánh giá được dịch ít)"
 ]
 
 LABEL_MAP = {
@@ -104,8 +107,8 @@ def load_models():
 
 MODELS, MODEL_STATUS, DEVICE = load_models()
 
-# --- HÀM GỌI GEMINI (GỘP TẤT CẢ INPUT) ---
-def ask_gemini_for_label(api_key, image_path, context="", expert_note="", prompt_guidance=""):
+# --- HÀM GỌI GEMINI (FULL INPUT) ---
+def ask_gemini_for_label(api_key, image_path, context="", expert_note="", prompt_guidance="", tech_tags=[]):
     try:
         genai.configure(api_key=api_key)
         
@@ -113,28 +116,30 @@ def ask_gemini_for_label(api_key, image_path, context="", expert_note="", prompt
         img = Image.open(image_path)
         labels_str = ", ".join([f"'{l}'" for l in ALLOWED_LABELS])
         
-        # --- CẤU TRÚC PROMPT MỚI (Đưa Prompt người dùng xuống cuối) ---
+        # Xử lý tech tags thành văn bản
+        tech_note = ", ".join(tech_tags) if tech_tags else "Phim đạt chuẩn kỹ thuật."
+        
+        # --- PROMPT TỐI ƯU ---
         final_prompt = f"""
         Vai trò: Bác sĩ chẩn đoán hình ảnh chuyên sâu (Senior Radiologist).
         
-        ==== DỮ LIỆU ĐẦU VÀO ====
-        1. BỆNH CẢNH LÂM SÀNG (CONTEXT):
-        "{context if context else 'Không có'}"
+        ==== 1. DỮ LIỆU ĐẦU VÀO ====
+        - BỆNH CẢNH (Context): "{context if context else 'Không có'}"
+        - GHI CHÚ CHUYÊN GIA (Expert Note): "{expert_note if expert_note else 'Không có'}"
+        - HƯỚNG DẪN CỤ THỂ (Guidance): "{prompt_guidance if prompt_guidance else 'Phân tích tổng quát'}"
         
-        2. Ý KIẾN CHUYÊN GIA/GHI CHÚ BAN ĐẦU (EXPERT NOTE):
-        "{expert_note if expert_note else 'Không có'}"
+        ==== 2. ĐIỀU KIỆN KỸ THUẬT (QA/QC) - QUAN TRỌNG ====
+        Trạng thái phim: {tech_note}
+        (Lưu ý: Hãy cân nhắc các yếu tố kỹ thuật trên để tránh Dương tính giả/Âm tính giả. Ví dụ: Nếu hít không sâu, đừng đọc vội là tim to hay rốn phổi đậm trừ khi quá rõ ràng).
         
-        3. YÊU CẦU CỤ THỂ/DẪN DẮT (USER PROMPT):
-        "{prompt_guidance if prompt_guidance else 'Phân tích tổng quát theo quy trình chuẩn.'}"
-        
-        ==== NHIỆM VỤ ====
-        - Phân tích hình ảnh X-quang dựa trên toàn bộ thông tin trên.
+        ==== 3. NHIỆM VỤ ====
+        - Phân tích hình ảnh X-quang đính kèm.
         - Chọn nhãn bệnh lý chính xác từ danh sách: [{labels_str}].
         - Nếu bình thường, chọn 'Bình thường (Normal)'.
         
         Output JSON: {{
             "labels": ["Label1", "Label2"],
-            "reasoning": "Biện luận chi tiết bằng tiếng Việt."
+            "reasoning": "Biện luận chi tiết bằng tiếng Việt, có nhắc đến yếu tố kỹ thuật nếu ảnh hưởng đến chẩn đoán."
         }}
         """
         
@@ -151,7 +156,7 @@ def ask_gemini_for_label(api_key, image_path, context="", expert_note="", prompt
                 last_error = str(e)
                 continue
         
-        # Fallback
+        # Fallback scan
         try:
             for m in genai.list_models():
                 if 'generateContent' in m.supported_generation_methods and ('flash' in m.name or 'pro' in m.name):
@@ -440,24 +445,30 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                 st.warning(f"AI Kết luận: {record['Result']}")
                 st.markdown("---")
                 
-                # --- PHẦN 1: THÔNG TIN NHẬP LIỆU ---
+                # --- KHU VỰC NHẬP LIỆU (Đưa lên trên Button) ---
                 st.markdown("#### 1. DỮ LIỆU ĐẦU VÀO")
                 
                 old_ctx = str(record.get("Clinical_Context", ""))
-                clinical_context = st.text_area("🏥 Bệnh cảnh lâm sàng (Tiền sử, triệu chứng):", value=old_ctx, height=70)
+                clinical_context = st.text_area("🏥 Bệnh cảnh (Context):", value=old_ctx, height=70)
                 
                 old_note = str(record.get("Expert_Note", ""))
                 expert_note = st.text_area("👨‍⚕️ Ý kiến chuyên gia (Ghi chú ban đầu):", value=old_note, height=70)
                 
-                clinical_guidance = st.text_area("🤖 Dẫn dắt AI (Prompt cuối cùng):", placeholder="Ví dụ: Tập trung phân tích vùng rốn phổi...", height=70)
+                clinical_guidance = st.text_area("🤖 Dẫn dắt AI (Prompt/Yêu cầu):", placeholder="Ví dụ: Tập trung phân tích vùng rốn phổi...", height=70)
                 
+                # --- PHẦN QA/QC (ĐƯA LÊN ĐÂY LÀM INPUT) ---
+                old_tags = str(record.get("Technical_Tags", ""))
+                default_tags = [t.strip() for t in old_tags.split(";") if t.strip()] if old_tags else []
+                technical_tags = st.multiselect("⚙️ Điều kiện kỹ thuật (QA/QC - Gửi kèm cho AI):", TECHNICAL_OPTS, default=default_tags)
+                
+                # --- NÚT GỌI AI ---
                 gemini_labels, gemini_reason, used_model, sent_prompt = [], "", "", ""
                 
                 if api_key:
                     if st.button("🧠 Xin ý kiến Gemini (Auto-Label)"):
-                        with st.spinner("Gemini đang phân tích (Kết hợp Bệnh cảnh + Ý kiến chuyên gia + Dẫn dắt)..."):
-                            # Gửi cả 3 trường dữ liệu sang hàm xử lý
-                            res = ask_gemini_for_label(api_key, img_path, clinical_context, expert_note, clinical_guidance)
+                        with st.spinner("Gemini đang phân tích (Đang kết hợp toàn bộ dữ liệu)..."):
+                            # Gửi kèm tech_tags vào hàm xử lý
+                            res = ask_gemini_for_label(api_key, img_path, clinical_context, expert_note, clinical_guidance, technical_tags)
                             gemini_labels = res.get("labels", [])
                             gemini_reason = res.get("reasoning", "")
                             used_model = res.get("used_model", "Unknown")
@@ -471,19 +482,14 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                                 st.error(f"⚠️ Lỗi Gemini: {gemini_reason}")
                 else: st.info("💡 Nhập Key để dùng tính năng gợi ý.")
 
-                # --- PHẦN 2: ĐÁNH GIÁ KẾT QUẢ ---
+                # --- KHU VỰC ĐÁNH GIÁ (FEEDBACK) ---
                 st.markdown("---")
-                st.markdown("#### 2. KẾT LUẬN & GÁN NHÃN")
+                st.markdown("#### 2. KẾT LUẬN & GÁN NHÃN (LABELING)")
                 
                 fb1 = str(record.get("Feedback_1", ""))
                 fb2 = str(record.get("Feedback_2", ""))
                 lb1 = str(record.get("Label_1", ""))
                 lb2 = str(record.get("Label_2", ""))
-                
-                # Tag kỹ thuật
-                old_tags = str(record.get("Technical_Tags", ""))
-                default_tags = [t.strip() for t in old_tags.split(";") if t.strip()] if old_tags else []
-                technical_tags = st.multiselect("⚙️ Điều kiện kỹ thuật (QA/QC):", TECHNICAL_TAGS, default=default_tags)
                 
                 fb_options = ["Chưa đánh giá", "✅ Đồng thuận (Đúng)", "⚠️ Dương tính giả", "⚠️ Âm tính giả"]
                 
@@ -497,7 +503,6 @@ elif mode == "📂 Hội Chẩn (AI Teacher)":
                     
                     if st.button("💾 LƯU LẦN 1"):
                         tags_str = "; ".join(technical_tags)
-                        # Lưu luôn cả Expert Note và Context vào CSV
                         update_feedback_slot(selected_id, new_fb1, "; ".join(new_lbl1), 1, gemini_reason, clinical_context, expert_note, tags_str)
                         st.success("Đã lưu Lần 1!"); time.sleep(0.5); st.rerun()
                 
