@@ -26,8 +26,8 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
     st.rerun()
 
-# ================= 1. CẤU HÌNH & CSS (FINAL STABLE) =================
-st.set_page_config(page_title="AI Hospital (V35.0 - Debug Mode)", page_icon="🏥", layout="wide")
+# ================= 1. CẤU HÌNH & CSS (FIX ADMIN SELECT) =================
+st.set_page_config(page_title="AI Hospital (V35.1 - Fix API)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
@@ -90,10 +90,7 @@ RATING_OPTS = ["Tệ", "TB", "Khá", "Tốt", "Xuất sắc"]
 
 # --- UTILS ---
 def get_vn_time(): return (datetime.utcnow() + timedelta(hours=7)).strftime("%H:%M %d/%m/%Y")
-
-def check_password(password):
-    # PASSWORD CỨNG: Admin@123p
-    return password == "Admin@123p"
+def check_password(password): return password == "Admin@123p"
 
 # --- KẾT NỐI SUPABASE ---
 @st.cache_resource
@@ -147,12 +144,14 @@ def view_log_popup(item):
     st.markdown(f"""<div class="popup-result-box">{item.get('response', '').replace("\n", "<br>")}</div>""", unsafe_allow_html=True)
     with st.expander("🔌 Xem Prompt"): st.code(item.get('prompt', ''), language="text")
 
-# --- GEMINI (RAW ERROR MODE) ---
+# --- GEMINI (FIX LỖI 404 - DÙNG MODEL MỚI NHẤT) ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     if not api_key: return {"labels": [], "reasoning": "Thiếu API Key", "prompt": ""}
     try:
         genai.configure(api_key=api_key)
-        model_priority = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+        # CẬP NHẬT LIST MODEL: Bỏ gemini-pro cũ, dùng 1.5 Flash (nhanh) và 1.5 Pro (thông minh)
+        model_priority = ["gemini-1.5-flash", "gemini-1.5-pro"]
+        
         labels_str = ", ".join(STRUCTURED_LABELS) 
         tech_note = ", ".join(tags) if tags else "Phim đạt chuẩn kỹ thuật."
         prompt = f"""
@@ -176,13 +175,11 @@ OUTPUT JSON: {{ "labels": ["..."], "reasoning": "VIẾT THEO CẤU TRÚC: Kỹ t
                 result["sent_prompt"] = prompt
                 return result
             except Exception as e:
-                # Lấy lỗi chi tiết
                 err_msg = str(e)
-                if "429" in err_msg: time.sleep(1); last_error = "429 (Quá tải)"; continue
+                if "429" in err_msg: time.sleep(1); continue
                 elif "API_KEY" in err_msg: return {"labels": [], "reasoning": "🔑 KEY HẾT HẠN HOẶC SAI!", "prompt": ""}
                 else: last_error = err_msg; continue
         
-        # TRẢ VỀ LỖI NGUYÊN BẢN (RAW)
         return {"labels": [], "reasoning": f"⚠️ Lỗi kết nối (RAW): {last_error}", "sent_prompt": prompt}
         
     except Exception as e: return {"labels": [], "reasoning": f"CRASH: {str(e)}", "sent_prompt": ""}
@@ -304,7 +301,6 @@ elif mode == "📂 Hội Chẩn (Cloud)":
             
             if selected_id:
                 record = df[df["id"] == selected_id].iloc[0]
-                
                 pil_img = None
                 if record.get('image_url'):
                     try: pil_img = Image.open(BytesIO(requests.get(record['image_url'], timeout=5).content))
@@ -317,7 +313,7 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                 
                 col_left, col_right = st.columns([1, 1.2])
                 
-                # === CỘT TRÁI: ẢNH + LOG ===
+                # === CỘT TRÁI ===
                 with col_left:
                     st.markdown('<div class="img-card">', unsafe_allow_html=True)
                     if record.get('image_url'): st.image(record['image_url'], use_container_width=True)
@@ -336,7 +332,7 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         st.markdown('</div>', unsafe_allow_html=True)
                     else: st.info("Chưa có lịch sử.")
 
-                # === CỘT PHẢI: INPUT -> KẾT QUẢ -> LABELING ===
+                # === CỘT PHẢI ===
                 with col_right:
                     st.markdown('<div class="labeling-header">1. DỮ LIỆU ĐẦU VÀO</div>', unsafe_allow_html=True)
                     tags = st.multiselect("⚙️ Điều kiện kỹ thuật (QA/QC):", TECHNICAL_OPTS, default=[t.strip() for t in (record.get("technical_tags") or "").split(";") if t])
@@ -388,30 +384,51 @@ elif mode == "📂 Hội Chẩn (Cloud)":
         else: st.warning("Trống.")
 
 elif mode == "🛠️ Xuất Dataset (Admin)":
-    st.title("🛠️ DATASET YOLO")
+    st.title("🛠️ XUẤT DATASET YOLO (Chọn lọc)")
     pwd = st.text_input("Password:", type="password")
     if pwd and check_password(pwd):
         df = get_logs()
         if not df.empty:
-            # FIX: Dùng session_state để giữ nút tải
+            # --- TÍNH NĂNG MỚI: CHỌN ĐỂ TẢI ---
+            st.markdown("### 📋 Chọn các hồ sơ muốn xuất:")
+            # Thêm cột "Chọn" mặc định là False
+            if "Select" not in df.columns: df.insert(0, "Select", False)
+            
+            # Data Editor để tick chọn
+            edited_df = st.data_editor(
+                df,
+                column_config={"Select": st.column_config.CheckboxColumn("Chọn", help="Tích để tải", default=False), "image_url": st.column_config.ImageColumn("Ảnh")},
+                disabled=df.columns.drop("Select"),
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            # Lọc ra các dòng đã chọn
+            selected_rows = edited_df[edited_df.Select]
+            
+            st.caption(f"Đã chọn: {len(selected_rows)} hồ sơ.")
+            
             if 'zip_btn' not in st.session_state: st.session_state.zip_btn = None
             
-            if st.button("🚀 TẠO FILE DATASET (ZIP)"):
-                with st.spinner("Đang tải ảnh và nén..."):
-                    buf = BytesIO()
-                    with zipfile.ZipFile(buf, "w") as zf:
-                        zf.writestr("classes.txt", "\n".join(LABEL_MAPPING.keys()))
-                        for i, r in df.iterrows():
-                            if r.get('image_url'):
-                                try:
-                                    zf.writestr(f"images/{r['id']}.jpg", requests.get(r['image_url'], timeout=3).content)
-                                    txt = "".join([f"{LABEL_MAPPING[l.strip()]} 0.5 0.5 1.0 1.0\n" for l in str(r.get('label_1') or "").split(";") if l.strip() in LABEL_MAPPING])
-                                    zf.writestr(f"labels/{r['id']}.txt", txt)
-                                except: pass
-                    st.session_state.zip_btn = buf.getvalue()
-                    st.rerun()
+            if st.button(f"🚀 ĐÓNG GÓI {len(selected_rows)} HỒ SƠ ĐÃ CHỌN"):
+                if len(selected_rows) == 0:
+                    st.warning("Vui lòng chọn ít nhất 1 hồ sơ!")
+                else:
+                    with st.spinner("Đang tải và nén..."):
+                        buf = BytesIO()
+                        with zipfile.ZipFile(buf, "w") as zf:
+                            zf.writestr("classes.txt", "\n".join(LABEL_MAPPING.keys()))
+                            for i, r in selected_rows.iterrows():
+                                if r.get('image_url'):
+                                    try:
+                                        zf.writestr(f"images/{r['id']}.jpg", requests.get(r['image_url'], timeout=3).content)
+                                        txt = "".join([f"{LABEL_MAPPING[l.strip()]} 0.5 0.5 1.0 1.0\n" for l in str(r.get('label_1') or "").split(";") if l.strip() in LABEL_MAPPING])
+                                        zf.writestr(f"labels/{r['id']}.txt", txt)
+                                    except: pass
+                        st.session_state.zip_btn = buf.getvalue()
+                        st.rerun()
             
             if st.session_state.zip_btn:
-                st.download_button("📥 TẢI DATA.ZIP NGAY", st.session_state.zip_btn, "data.zip", "application/zip", type="primary")
+                st.download_button("📥 TẢI XUỐNG NGAY (ZIP)", st.session_state.zip_btn, "dataset_selected.zip", "application/zip", type="primary")
         else: st.info("Chưa có dữ liệu.")
     elif pwd: st.error("Sai mật khẩu!")
