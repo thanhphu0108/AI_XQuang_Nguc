@@ -26,62 +26,48 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
     st.rerun()
 
-# ================= 1. CẤU HÌNH & CSS (CÓ POPUP TO BỰ) =================
-st.set_page_config(page_title="AI Hospital (V33.9 - Big Popup)", page_icon="🏥", layout="wide")
+# ================= 1. CẤU HÌNH & CSS (COMPACT DASHBOARD) =================
+st.set_page_config(page_title="AI Hospital (V34.1 - Dashboard)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
+    /* 1. GIẢM KHOẢNG TRẮNG THỪA CỦA STREAMLIT ĐỂ GỌN MÀN HÌNH */
+    .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 2rem !important;
+        max-width: 100% !important;
+    }
+    
+    /* 2. CHỈNH FONT & GIAO DIỆN COMPACT */
     .main { background-color: #f4f6f9; }
+    h1 { font-size: 1.5rem !important; margin-bottom: 0 !important; }
+    h3 { font-size: 1.1rem !important; margin-top: 0 !important; }
     
-    /* --- HACK CSS CHO POPUP (DIALOG) TO 80% --- */
-    div[data-testid="stModal"] div[role="dialog"] {
-        width: 90vw !important; /* Chiếm 90% chiều ngang màn hình */
-        max-width: 90vw !important;
-        min-width: 80vw !important;
+    /* 3. POPUP TO 90% */
+    div[role="dialog"][aria-modal="true"] {
+        width: 90vw !important; max-width: 90vw !important; min-width: 80vw !important;
     }
-    
-    /* Giao diện nội dung trong Popup */
-    .popup-result {
-        background-color: #f1f8e9;
-        border: 2px solid #81c784;
-        padding: 20px;
-        border-radius: 10px;
-        color: #1b5e20;
-        font-family: 'Segoe UI', sans-serif;
-        font-size: 15px;
-        line-height: 1.6;
-        margin-bottom: 20px;
-    }
-    .popup-header {
-        font-size: 18px; font-weight: bold; color: #2e7d32; 
-        border-bottom: 2px solid #a5d6a7; padding-bottom: 10px; margin-bottom: 15px;
+    .popup-result-box {
+        background-color: #f1f8e9; border: 2px solid #81c784; padding: 15px; border-radius: 8px;
+        color: #1b5e20; font-family: 'Segoe UI'; font-size: 15px; line-height: 1.5;
     }
 
-    /* CARD STYLE */
+    /* 4. CARD STYLE (GỌN HƠN) */
     .sci-card {
-        background-color: white;
-        padding: 15px;
-        border-radius: 8px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        margin-bottom: 15px;
-        border-left: 4px solid #002f6c;
+        background-color: white; padding: 12px; border-radius: 8px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.1); margin-bottom: 10px; border-top: 3px solid #002f6c;
     }
-    .sci-header {
-        font-size: 14px; font-weight: bold; color: #555; text-transform: uppercase;
-        margin-bottom: 10px; border-bottom: 1px dashed #eee; padding-bottom: 5px;
-    }
+    .labeling-zone { border-top-color: #ff9800 !important; background-color: #fffbf0 !important; }
     
-    /* GEMINI PREVIEW (Dưới nút) */
+    /* 5. GEMINI BOX */
     .gemini-result-zone {
-        background-color: #e3f2fd; border: 1px solid #90caf9; border-radius: 8px; padding: 15px; margin-top: 15px; margin-bottom: 20px;
+        background-color: #e3f2fd; border: 1px solid #90caf9; border-radius: 6px; padding: 10px; margin-top: 10px;
     }
-    .gemini-content { font-size: 13px; color: #0d47a1; line-height: 1.5; max-height: 300px; overflow-y: auto; }
+    .gemini-content { font-size: 13px; color: #0d47a1; line-height: 1.4; max-height: 400px; overflow-y: auto; }
     
-    .labeling-zone { border-left: 4px solid #ff9800 !important; background-color: #fff8e1 !important; }
-    .stButton>button { width: 100%; font-weight: bold; height: 45px; }
-    
-    .chat-row { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid #eee; font-size: 13px; }
-    .chat-row:hover { background-color: #f5f5f5; cursor: pointer; }
+    .stButton>button { width: 100%; font-weight: bold; border-radius: 4px; }
+    .chat-row { font-size: 12px; padding: 5px; border-bottom: 1px dashed #eee; color: #555; cursor: pointer; }
+    .chat-row:hover { background-color: #f0f0f0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -156,24 +142,12 @@ def get_logs():
         return pd.DataFrame(response.data)
     except: return pd.DataFrame()
 
-# --- POPUP DIALOG (V33.9 - BIG SIZE) ---
-@st.dialog("📋 CHI TIẾT HỘI CHẨN (TOÀN MÀN HÌNH)")
+# --- POPUP DIALOG ---
+@st.dialog("📋 CHI TIẾT HỘI CHẨN")
 def view_log_popup(item):
-    # CSS Hack đã làm việc ở trên để width=90vw
-    
-    st.caption(f"🕒 Thời gian: {item.get('time')} | Model: {item.get('model')}")
-    
-    # 1. KẾT QUẢ CHÍNH (ƯU TIÊN HIỆN TO)
-    st.markdown(f"""
-    <div class="popup-result">
-        <div class="popup-header">🤖 KẾT QUẢ PHÂN TÍCH</div>
-        {item.get('response', 'Chưa có nội dung').replace("\n", "<br>")}
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # 2. PROMPT (ẨN VÀO EXPANDER ĐỂ GỌN)
-    with st.expander("🔍 Xem lại Câu lệnh Prompt (Dành cho Kỹ thuật)"):
-        st.code(item.get('prompt', ''), language="text")
+    st.caption(f"🕒 {item.get('time')} | {item.get('model')}")
+    st.markdown(f"""<div class="popup-result-box">{item.get('response', '').replace("\n", "<br>")}</div>""", unsafe_allow_html=True)
+    with st.expander("🔍 Prompt"): st.code(item.get('prompt', ''), language="text")
 
 # --- GEMINI ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
@@ -210,7 +184,6 @@ OUTPUT JSON FORMAT:
 }}
         """
         
-        last_error = ""
         for model_name in model_priority:
             try:
                 model = genai.GenerativeModel(model_name)
@@ -220,16 +193,15 @@ OUTPUT JSON FORMAT:
                 result["sent_prompt"] = prompt
                 return result
             except Exception as e:
-                err_str = str(e)
-                if "429" in err_str: time.sleep(1); continue
-                elif "API_KEY_INVALID" in err_str or "expired" in err_str:
+                if "429" in str(e): time.sleep(1); continue
+                elif "API_KEY_INVALID" in str(e) or "expired" in str(e):
                     return {"labels": [], "reasoning": "🔑 KEY HẾT HẠN! Vui lòng đổi Key mới.", "prompt": ""}
-                else: last_error = err_str; continue
+                else: continue
 
-        return {"labels": [], "reasoning": f"Lỗi: {last_error}", "sent_prompt": prompt}
+        return {"labels": [], "reasoning": "Hệ thống bận, vui lòng thử lại.", "sent_prompt": prompt}
 
     except Exception as e:
-        return {"labels": [], "reasoning": f"System Error: {str(e)}", "sent_prompt": ""}
+        return {"labels": [], "reasoning": f"Lỗi: {str(e)}", "sent_prompt": ""}
 
 # --- PROCESS IMAGE ---
 def process_and_save(image_file):
@@ -315,7 +287,7 @@ if mode == "🔍 Phân Tích & In Phiếu":
             else: st.error("Lỗi.")
 
 elif mode == "📂 Hội Chẩn (Cloud)":
-    st.title("📂 HỘI CHẨN CHUYÊN GIA")
+    # st.title("📂 HỘI CHẨN CHUYÊN GIA") # Bỏ title to để tiết kiệm chỗ
     
     if not supabase: st.error("⛔ Chưa kết nối Cloud.")
     else:
@@ -323,11 +295,14 @@ elif mode == "📂 Hội Chẩn (Cloud)":
         if not df.empty:
             df = df.fillna("")
             id_list = df['id'].tolist()
-            selected_id = st.selectbox("👉 Chọn Mã Hồ Sơ:", id_list)
+            
+            # THANH CHỌN HỒ SƠ (GỌN)
+            c_sel, c_info = st.columns([1, 2])
+            with c_sel:
+                selected_id = st.selectbox("Mã Hồ Sơ:", id_list, label_visibility="collapsed")
             
             if selected_id:
                 record = df[df["id"] == selected_id].iloc[0]
-                
                 pil_img = None
                 if record.get('image_url'):
                     try: pil_img = Image.open(BytesIO(requests.get(record['image_url'], timeout=5).content))
@@ -338,20 +313,24 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                     try: hist_data = json.loads(hist_data)
                     except: hist_data = []
                 
-                col_left, col_right = st.columns([1.2, 1])
+                # === GIAO DIỆN CHÍNH: 2 CỘT 60/40 ===
+                col_left, col_right = st.columns([1.3, 1])
                 
-                # === CỘT TRÁI ===
+                # --- CỘT TRÁI: ẢNH + LABELING (QUAN TRỌNG NHẤT) ---
                 with col_left:
+                    # 1. ẢNH TO
                     st.markdown('<div class="sci-card">', unsafe_allow_html=True)
                     if record.get('image_url'): st.image(record['image_url'], use_container_width=True)
                     res_yolo = record.get('result')
                     color = "red" if res_yolo == "BẤT THƯỜNG" else "green"
-                    st.caption(f"Sàng lọc sơ bộ (YOLO): {res_yolo}")
+                    st.markdown(f"**YOLO:** <span style='color:{color}'>{res_yolo}</span> | **BN:** {record.get('patient_info')}", unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
 
+                    # 2. KHUNG GÁN NHÃN (COMPACT)
                     st.markdown('<div class="sci-card labeling-zone">', unsafe_allow_html=True)
-                    st.markdown('<div class="sci-header">🏷️ GÁN NHÃN & KẾT LUẬN</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="sci-header">🏷️ CHỐT KẾT QUẢ</div>', unsafe_allow_html=True)
                     
+                    # Auto-Select
                     saved_lbls = [l.strip() for l in (record.get("label_1") or "").split(";") if l]
                     if not saved_lbls and hist_data:
                         last_resp = hist_data[0].get("response", "")
@@ -359,83 +338,77 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                             clean_name = sl.split("(")[0].split("/")[-1].strip()
                             if clean_name.lower() in last_resp.lower(): saved_lbls.append(sl)
                     
-                    new_fb = st.radio("Đánh giá AI:", FEEDBACK_OPTS, index=0, horizontal=True)
-                    new_lbls = st.multiselect("Chốt bệnh (Auto-Fill):", STRUCTURED_LABELS, default=[l for l in saved_lbls if l in STRUCTURED_LABELS])
-                    safe_rating = record.get("prompt_rating") if record.get("prompt_rating") in RATING_OPTS else "Khá"
-                    rating = st.select_slider("Chất lượng Prompt:", options=RATING_OPTS, value=safe_rating)
+                    c1, c2 = st.columns(2)
+                    with c1: new_fb = st.radio("Đánh giá AI:", FEEDBACK_OPTS, index=0)
+                    with c2: rating = st.select_slider("Chất lượng Prompt:", options=RATING_OPTS, value="Khá")
                     
-                    # --- NÚT LƯU Ở GIỮA ---
-                    c1, c2, c3 = st.columns([1, 2, 1])
-                    with c2:
-                        if st.button("💾 LƯU KẾT QUẢ", type="primary", use_container_width=True):
-                            save_log({
-                                "id": selected_id, "feedback_1": new_fb, "label_1": "; ".join(new_lbls), "prompt_rating": rating
-                            })
-                            st.success("✅ Đã lưu!")
+                    new_lbls = st.multiselect("Bệnh lý (Đa chọn):", STRUCTURED_LABELS, default=[l for l in saved_lbls if l in STRUCTURED_LABELS])
                     
+                    if st.button("💾 LƯU KẾT QUẢ", type="primary"):
+                        save_log({
+                            "id": selected_id, "feedback_1": new_fb, "label_1": "; ".join(new_lbls), "prompt_rating": rating
+                        })
+                        st.success("✅ Đã lưu!")
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                # === CỘT PHẢI ===
+                # --- CỘT PHẢI: TAB NHẬP LIỆU & AI ---
                 with col_right:
-                    st.markdown('<div class="sci-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="sci-header">📝 DỮ LIỆU LÂM SÀNG</div>', unsafe_allow_html=True)
-                    ctx = st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "", height=80)
-                    note = st.text_area("Ghi chú:", value=record.get("expert_note") or "", height=60)
-                    guide = st.text_area("Prompt:", value=record.get("prompt_guidance") or "", height=60)
-                    tags = st.multiselect("Kỹ thuật:", TECHNICAL_OPTS, default=[t.strip() for t in (record.get("technical_tags") or "").split(";") if t])
+                    # DÙNG TAB ĐỂ GOM GỌN
+                    tab_input, tab_ai = st.tabs(["📝 NHẬP LIỆU", "🤖 AI & CHAT"])
                     
-                    if st.button("Lưu thông tin lâm sàng"):
-                        save_log({"id": selected_id, "clinical_context": ctx, "expert_note": note, "prompt_guidance": guide, "technical_tags": "; ".join(tags)})
-                        st.toast("Đã lưu!")
-                    st.markdown('</div>', unsafe_allow_html=True)
+                    # TAB 1: NHẬP LIỆU
+                    with tab_input:
+                        ctx = st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "", height=100)
+                        note = st.text_area("Ghi chú:", value=record.get("expert_note") or "", height=60)
+                        guide = st.text_area("Prompt:", value=record.get("prompt_guidance") or "", height=60)
+                        tags = st.multiselect("Kỹ thuật:", TECHNICAL_OPTS, default=[t.strip() for t in (record.get("technical_tags") or "").split(";") if t])
+                        if st.button("Lưu thông tin lâm sàng"):
+                            save_log({"id": selected_id, "clinical_context": ctx, "expert_note": note, "prompt_guidance": guide, "technical_tags": "; ".join(tags)})
+                            st.toast("Đã lưu!")
 
-                    if st.button("🧠 HỎI GEMINI (Lưu Nhật Ký)", type="secondary"):
-                        if not api_key: st.error("Thiếu API Key")
-                        else:
-                            with st.spinner("Gemini đang phân tích..."):
-                                res = ask_gemini(api_key, pil_img, ctx, note, guide, tags)
-                                txt = res.get("reasoning", "")
-                                if txt:
-                                    if "KEY HẾT HẠN" in txt: st.error(txt)
-                                    else:
-                                        new_entry = {
-                                            "time": datetime.now().strftime("%H:%M %d/%m"),
-                                            "prompt": res.get("sent_prompt", ""),
-                                            "response": txt,
-                                            "model": res.get("used_model", "AI")
-                                        }
-                                        hist_data.insert(0, new_entry)
-                                        save_log({"id": selected_id, "ai_reasoning": json.dumps(hist_data)})
-                                        st.success("Đã cập nhật!")
-                                        time.sleep(0.5); st.rerun()
-                                else: st.error(f"Lỗi: {res}")
+                    # TAB 2: AI & CHAT
+                    with tab_ai:
+                        # Nút Chat
+                        if st.button("🧠 HỎI GEMINI (Auto Log)", type="secondary"):
+                            if not api_key: st.error("Thiếu API Key")
+                            else:
+                                with st.spinner("Gemini đang phân tích..."):
+                                    res = ask_gemini(api_key, pil_img, ctx, note, guide, tags)
+                                    txt = res.get("reasoning", "")
+                                    if txt:
+                                        if "KEY HẾT HẠN" in txt: st.error(txt)
+                                        else:
+                                            new_entry = {
+                                                "time": datetime.now().strftime("%H:%M %d/%m"),
+                                                "prompt": res.get("sent_prompt", ""),
+                                                "response": txt,
+                                                "model": res.get("used_model", "AI")
+                                            }
+                                            hist_data.insert(0, new_entry)
+                                            save_log({"id": selected_id, "ai_reasoning": json.dumps(hist_data)})
+                                            st.success("Đã cập nhật!")
+                                            time.sleep(0.5); st.rerun()
+                                    else: st.error(f"Lỗi: {res}")
 
-                    # --- RESULT ZONE ---
-                    if hist_data:
-                        last_item = hist_data[0]
-                        model = last_item.get('model', 'Gemini')
-                        resp = last_item.get('response', '').replace("\n", "<br>")
-                        
-                        st.markdown(f"""
-                        <div class="gemini-result-zone">
-                            <h4>🤖 KẾT QUẢ MỚI NHẤT ({model})</h4>
-                            <div class="gemini-content">{resp}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Show History
-                        with st.expander("📜 Lịch sử cũ hơn"):
-                            for i, item in enumerate(hist_data[1:]): # Bỏ cái đầu
-                                c_txt, c_btn = st.columns([4, 1])
-                                with c_txt:
-                                    st.markdown(f"<b>{item.get('time')}</b>: {item.get('response')[:50]}...", unsafe_allow_html=True)
-                                with c_btn:
-                                    if st.button("🔍", key=f"view_old_{i}"):
-                                        view_log_popup(item)
-                    
-                    # Nút xem full TOÀN MÀN HÌNH
-                    if hist_data and st.button("🔍 XEM POPUP (TOÀN MÀN HÌNH)"):
-                        view_log_popup(hist_data[0])
+                        # Kết quả mới nhất (Ngay dưới nút)
+                        if hist_data:
+                            last_item = hist_data[0]
+                            st.markdown(f"""
+                            <div class="gemini-result-zone">
+                                <h4>🤖 KẾT QUẢ ({last_item.get('model')})</h4>
+                                <div class="gemini-content">{last_item.get('response', '').replace("\n", "<br>")}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Nút xem to
+                            if st.button("🔍 XEM FULL (POPUP 90%)"):
+                                view_log_popup(last_item)
+                            
+                            st.divider()
+                            st.caption("Lịch sử cũ:")
+                            for i, item in enumerate(hist_data[1:]):
+                                if st.button(f"🕒 {item.get('time')}", key=f"hist_{i}"):
+                                    view_log_popup(item)
 
         else: st.warning("📭 Database trống.")
 
