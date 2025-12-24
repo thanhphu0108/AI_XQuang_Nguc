@@ -142,24 +142,67 @@ def get_logs():
     except: return pd.DataFrame()
 
 # --- GEMINI ---
+# --- GEMINI (V32.0 - AUTO SMART SELECT) ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     if not api_key: return {}
-    try:
-        genai.configure(api_key=api_key)
-        labels_str = ", ".join(list(LABEL_MAP.values())) # Dùng nhãn tiếng Việt
-        tech_note = ", ".join(tags) if tags else "Chuẩn."
-        
-        prompt = f"""
-        Role: Senior Radiologist.
-        INPUTS: Context="{context}", ExpertNote="{note}", Guidance="{guide}", TechQA="{tech_note}".
-        TASK: Analyze Chest X-ray. Select labels from: {labels_str}.
-        OUTPUT JSON: {{ "labels": ["..."], "reasoning": "..." }} (Reasoning in Vietnamese)
-        """
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content([prompt, image], generation_config={"response_mime_type": "application/json"})
-        return json.loads(response.text)
-    except Exception as e: return {"labels": [], "reasoning": str(e)}
+    
+    # Cấu hình API
+    try: genai.configure(api_key=api_key)
+    except: return {"labels": [], "reasoning": "Sai API Key"}
 
+    # --- DANH SÁCH MỤC TIÊU (Ưu tiên từ Xịn -> Nhanh) ---
+    # Google hiện tại chưa có 2.5 hay 3.5, mới nhất là 2.0 Flash Exp
+    model_priority = [
+        "gemini-2.0-flash-exp",  # Mới nhất, xịn nhất (Thử trước)
+        "gemini-1.5-pro",        # Phân tích sâu (Thử nhì)
+        "gemini-1.5-flash"       # Nhanh, ổn định (Chống trượt)
+    ]
+
+    labels_str = ", ".join(ALLOWED_LABELS) # Danh sách bệnh tiếng Anh (để AI dễ hiểu)
+    tech_note = ", ".join(tags) if tags else "Chuẩn."
+    
+    # Prompt tối ưu hóa
+    prompt = f"""
+    Role: Senior Radiologist.
+    INPUTS: 
+    - Clinical Context: "{context}"
+    - Expert Note: "{note}"
+    - Technical QA: "{tech_note}"
+    - Guidance: "{guide}"
+    
+    TASK: Analyze Chest X-ray image. 
+    1. Check technical quality.
+    2. Detect abnormalities from this list: [{labels_str}]. If none, return 'Normal'.
+    3. Provide reasoning in Vietnamese (Tiếng Việt).
+    
+    OUTPUT JSON FORMAT: {{ "labels": ["..."], "reasoning": "..." }}
+    """
+
+    # --- VÒNG LẶP AUTO SCAN ---
+    last_error = ""
+    for model_name in model_priority:
+        try:
+            # Tạo model
+            model = genai.GenerativeModel(model_name)
+            
+            # Gửi ảnh và prompt
+            response = model.generate_content(
+                [prompt, image], 
+                generation_config={"response_mime_type": "application/json"}
+            )
+            
+            # Nếu chạy thành công đến đây thì trả về kết quả ngay
+            result = json.loads(response.text)
+            result["used_model"] = model_name # Ghi dấu lại xem nó dùng model nào
+            return result
+            
+        except Exception as e:
+            # Nếu lỗi, bỏ qua, thử model tiếp theo trong danh sách
+            last_error = str(e)
+            continue 
+
+    # Nếu thử hết cả 3 model mà vẫn lỗi
+    return {"labels": [], "reasoning": f"Hệ thống bận hoặc lỗi API (Chi tiết: {last_error})", "used_model": "Failed"}
 # --- HTML REPORT ---
 def generate_html_report(findings_input, has_danger, patient_info, img_id, gemini_text=""):
     current_time = datetime.now().strftime('%H:%M ngày %d/%m/%Y')
