@@ -70,20 +70,36 @@ def load_models():
 MODELS, MODEL_STATUS, DEVICE = load_models()
 
 # --- SUPABASE FUNCTIONS ---
+# --- Thay thế hàm cũ bằng hàm này ---
 def upload_image(img_cv, filename):
     try:
-        # Encode JPG
+        # 1. Convert ảnh
         _, buffer = cv2.imencode('.jpg', cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR))
-        bucket = "xray_images"
-        # Upload
-        supabase.storage.from_(bucket).upload(filename, buffer.tobytes(), {"content-type": "image/jpeg", "upsert": "true"})
-        # Get URL
-        return supabase.storage.from_(bucket).get_public_url(filename)
-    except Exception as e:
-        # Fallback lấy URL nếu lỗi upload (do file tồn tại)
-        try: return supabase.storage.from_("xray_images").get_public_url(filename)
-        except: return None
+        bucket_name = "xray_images"
+        file_bytes = buffer.tobytes()
+        mime_type = "image/jpeg"
 
+        # 2. Thử Upload
+        # Lưu ý: file_options phải đúng cú pháp
+        res = supabase.storage.from_(bucket_name).upload(
+            path=filename,
+            file=file_bytes,
+            file_options={"content-type": mime_type, "upsert": "true"}
+        )
+        
+        # 3. Lấy URL
+        return supabase.storage.from_(bucket_name).get_public_url(filename)
+
+    except Exception as e:
+        # IN CHI TIẾT LỖI RA MÀN HÌNH ĐỂ DEBUG
+        error_msg = str(e)
+        if "403" in error_msg:
+            st.error(f"⛔ Lỗi Quyền (403): Bạn chưa chạy lệnh SQL cấp quyền Upload!")
+        elif "404" in error_msg:
+            st.error(f"⛔ Lỗi 404: Sai URL Supabase hoặc chưa tạo Bucket 'xray_images'.")
+        else:
+            st.error(f"⛔ Lỗi Upload lạ: {error_msg}")
+        return None
 def save_log(data):
     try:
         supabase.table("logs").upsert(data).execute()
