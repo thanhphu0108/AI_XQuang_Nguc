@@ -2,24 +2,6 @@ import streamlit as st
 import subprocess
 import sys
 import time
-
-# --- 🛠️ TỰ ĐỘNG SỬA LỖI THƯ VIỆN (AUTO-FIX) ---
-try:
-    import google.generativeai as genai
-    version = getattr(genai, '__version__', '0.0.0')
-    if version < '0.7.0':
-        st.toast("🔄 Updating AI library...", icon="⚙️")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "google-generativeai"])
-        st.toast("✅ Done! Restarting...", icon="🚀")
-        time.sleep(1)
-        st.rerun()
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
-    st.rerun()
-
-# ==================================================
-# CODE CHÍNH (V32.5 - FIX CRASH)
-# ==================================================
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -35,7 +17,15 @@ from supabase import create_client, Client
 import requests
 from io import BytesIO
 
-st.set_page_config(page_title="AI Hospital (V32.5 - Stable)", page_icon="🏥", layout="wide")
+# --- 🛠️ AUTO-FIX LIB ---
+try:
+    import google.generativeai as genai
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
+    st.rerun()
+
+# ================= 1. CẤU HÌNH & CSS =================
+st.set_page_config(page_title="AI Hospital (V32.6 - UI Fix)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
@@ -51,20 +41,44 @@ st.markdown("""
     .section-title { background-color: #e3f2fd; font-weight: bold; padding: 8px; margin-top: 20px; border-left: 4px solid #002f6c; text-transform: uppercase; font-size: 14px; }
     .conclusion-box { border: 2px solid #333; padding: 15px; margin-top: 20px; text-align: center; font-weight: bold; }
     .stButton>button { width: 100%; font-weight: bold; height: 45px; }
-    div[role="radiogroup"] > label > div:first-child { background-color: #e3f2fd; }
+    
+    /* Style cho kết quả Gemini ngay dưới nút */
+    .gemini-result-box {
+        background-color: #e8f5e9;
+        border-left: 5px solid #2e7d32;
+        padding: 15px;
+        margin-top: 15px;
+        border-radius: 5px;
+    }
+    .prompt-box {
+        font-family: monospace;
+        font-size: 12px;
+        background-color: #f1f1f1;
+        padding: 10px;
+        border-radius: 5px;
+        margin-top: 10px;
+        color: #555;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- TỪ ĐIỂN ---
-ALLOWED_LABELS = ["Normal", "Cardiomegaly", "Pneumonia", "Effusion", "Pneumothorax", "Nodule_Mass", "Fibrosis_TB", "Fracture", "Pleural_Thickening", "Other"]
-LABEL_MAP = {
-    "Normal": "Bình thường", "Cardiomegaly": "Bóng tim to (Cardiomegaly)", "Pneumonia": "Viêm phổi (Pneumonia)",
-    "Effusion": "Tràn dịch (Effusion)", "Pneumothorax": "Tràn khí (Pneumothorax)", "Nodule_Mass": "Nốt/Khối mờ",
-    "Fibrosis_TB": "Xơ hóa/Lao", "Fracture": "Gãy xương", "Pleural_Thickening": "Dày dính màng phổi", "Other": "Khác"
-}
-VN_LABELS_LIST = list(LABEL_MAP.values())
+# --- TỪ ĐIỂN NHÃN BỆNH (VÙNG / BỆNH) ---
+# Format mới theo yêu cầu: Vùng GPB / Tên bệnh
+STRUCTURED_LABELS = [
+    "Phổi / Bình thường (Normal)",
+    "Tim / Bóng tim to (Cardiomegaly)",
+    "Phổi / Viêm phổi (Pneumonia)",
+    "Màng phổi / Tràn dịch (Effusion)",
+    "Màng phổi / Tràn khí (Pneumothorax)",
+    "Phổi / Nốt - Khối mờ (Nodule/Mass)",
+    "Phổi / Xơ hóa - Lao (Fibrosis/TB)",
+    "Xương / Gãy xương (Fracture)",
+    "Màng phổi / Dày dính (Pleural Thickening)",
+    "Khác / Bệnh lý khác (Other)"
+]
+
 TECHNICAL_OPTS = ["✅ Phim đạt chuẩn", "⚠️ Chụp tại giường (AP)", "⚠️ Hít vào nông", "⚠️ Bệnh nhân xoay", "⚠️ Tia cứng/mềm", "⚠️ Dị vật/Áo"]
-FEEDBACK_OPTS = ["Chưa đánh giá", "✅ Đồng thuận (AI Đúng)", "⚠️ Dương tính giả (AI Báo thừa)", "⚠️ Âm tính giả (AI Bỏ sót)", "❌ Sai hoàn toàn"]
+FEEDBACK_OPTS = ["Chưa đánh giá", "✅ Đồng thuận", "⚠️ Dương tính giả", "⚠️ Âm tính giả", "❌ Sai hoàn toàn"]
 RATING_OPTS = ["Tệ", "TB", "Khá", "Tốt", "Xuất sắc"]
 
 # --- KẾT NỐI SUPABASE ---
@@ -125,9 +139,9 @@ def get_logs():
         return pd.DataFrame(response.data)
     except: return pd.DataFrame()
 
-# --- GEMINI (V32.5 - AUTO DISCOVERY) ---
+# --- GEMINI (V32.6 - RETURN PROMPT) ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
-    if not api_key: return {"labels": [], "reasoning": "Thiếu API Key"}
+    if not api_key: return {"labels": [], "reasoning": "Thiếu API Key", "prompt": ""}
     
     try:
         genai.configure(api_key=api_key)
@@ -142,24 +156,34 @@ def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
                 else: target_model = candidates[0].replace("models/", "")
         except: pass
             
-        st.toast(f"🤖 Model: {target_model}") 
-
-        labels_str = ", ".join(ALLOWED_LABELS) 
+        labels_str = ", ".join(STRUCTURED_LABELS) 
         tech_note = ", ".join(tags) if tags else "Chuẩn."
         
+        # TẠO PROMPT
         prompt = f"""
         Role: Senior Radiologist.
-        INPUTS: Context="{context}", ExpertNote="{note}", Guidance="{guide}", TechQA="{tech_note}".
-        TASK: Analyze Chest X-ray. Select labels from: [{labels_str}].
-        OUTPUT JSON: {{ "labels": ["..."], "reasoning": "..." }} (Reasoning in Vietnamese)
+        INPUTS: 
+        - Clinical Context: "{context}"
+        - Expert Note: "{note}"
+        - Technical QA: "{tech_note}"
+        - Guidance: "{guide}"
+        
+        TASK: Analyze Chest X-ray. 
+        Select closest labels from this list: {labels_str}.
+        Provide reasoning in Vietnamese.
+        
+        OUTPUT JSON: {{ "labels": ["..."], "reasoning": "..." }}
         """
         
         model = genai.GenerativeModel(target_model)
         response = model.generate_content([prompt, image], generation_config={"response_mime_type": "application/json"})
-        return json.loads(response.text)
+        result = json.loads(response.text)
+        result["used_model"] = target_model
+        result["sent_prompt"] = prompt # Trả về Prompt để hiện ra UI
+        return result
 
     except Exception as e:
-        return {"labels": [], "reasoning": f"Lỗi Gemini: {str(e)}"}
+        return {"labels": [], "reasoning": f"Lỗi Gemini: {str(e)}", "sent_prompt": prompt}
 
 # --- HTML REPORT ---
 def generate_html_report(findings_input, has_danger, patient_info, img_id, gemini_text=""):
@@ -317,8 +341,6 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         if record.get('image_url'): st.image(record['image_url'], use_container_width=True)
                     with c2:
                         st.info(f"BN: {record.get('patient_info')} | AI: {record.get('result')}")
-                        if record.get('ai_reasoning'):
-                            with st.expander("🤖 Đọc kết quả Gemini cũ"): st.write(record.get('ai_reasoning'))
                         
                         st.markdown("#### 📝 Lâm sàng & Kỹ thuật")
                         ctx = st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "", height=68)
@@ -326,31 +348,58 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         guide = st.text_area("Prompt cho AI:", value=record.get("prompt_guidance") or "", height=68)
                         tags = st.multiselect("Lỗi Kỹ thuật:", TECHNICAL_OPTS, default=[t.strip() for t in (record.get("technical_tags") or "").split(";") if t])
                         
-                        if st.button("🧠 Hỏi lại Gemini (Auto Fix)"):
+                        # --- NÚT HỎI GEMINI & HIỂN THỊ NGAY BÊN DƯỚI ---
+                        if st.button("🧠 HỎI GEMINI NGAY"):
                             if not api_key: st.error("⚠️ Thiếu API Key!")
                             elif not pil_img: st.error("⚠️ Lỗi ảnh!")
                             else:
-                                with st.spinner("Đang tìm Model phù hợp..."):
+                                with st.spinner("Đang hỏi Gemini..."):
                                     res = ask_gemini(api_key, pil_img, ctx, note, guide, tags)
-                                    if res.get("reasoning"):
-                                        save_log({"id": selected_id, "ai_reasoning": res["reasoning"]})
-                                        st.success("Đã cập nhật!")
-                                        time.sleep(1); st.rerun()
-                                    else: st.error(f"Lỗi: {res}")
+                                    txt = res.get("reasoning", "")
+                                    sent_prompt = res.get("sent_prompt", "")
+                                    
+                                    if txt:
+                                        # Hiện kết quả NGAY LẬP TỨC
+                                        st.markdown(f"""
+                                        <div class="gemini-result-box">
+                                            <b>🤖 Trả lời:</b><br>{txt}
+                                        </div>
+                                        """, unsafe_allow_html=True)
+                                        
+                                        # Hiện Prompt đã gửi (để debug)
+                                        with st.expander("🔍 Xem Prompt đã gửi (Debug)"):
+                                            st.code(sent_prompt, language="text")
+
+                                        # Lưu vào DB
+                                        save_log({"id": selected_id, "ai_reasoning": txt, "full_prompt": sent_prompt})
+                                        st.toast("Đã lưu kết quả vào hồ sơ!")
+                                    else:
+                                        st.error(f"Lỗi: {res}")
                         
+                        # Nếu đã có kết quả cũ mà chưa bấm nút, hiện lại
+                        elif record.get('ai_reasoning'):
+                            st.markdown(f"""
+                            <div class="gemini-result-box" style="background:#fff3e0; border-color:#ff9800;">
+                                <b>🤖 Kết quả cũ:</b><br>{record.get('ai_reasoning')}
+                            </div>
+                            """, unsafe_allow_html=True)
+
                         st.markdown("---")
                         st.markdown("#### 🏷️ Gán nhãn")
                         fb1 = str(record.get("feedback_1") or "Chưa đánh giá")
                         if fb1 == "Chưa đánh giá":
                             st.markdown('<div class="step-badge">VÒNG 1</div>', unsafe_allow_html=True)
                             new_fb = st.radio("Đánh giá AI:", FEEDBACK_OPTS, index=0)
-                            new_lbls = st.multiselect("Chốt bệnh:", VN_LABELS_LIST, default=[l.strip() for l in (record.get("label_1") or "").split(";") if l])
                             
-                            # --- FIX VALUE ERROR HERE ---
+                            # --- CHỌN BỆNH THEO CẤU TRÚC MỚI (VÙNG / BỆNH) ---
+                            # Tự động map label cũ sang format mới nếu có
+                            saved_lbls = [l.strip() for l in (record.get("label_1") or "").split(";") if l]
+                            valid_defaults = [l for l in saved_lbls if l in STRUCTURED_LABELS]
+                            
+                            new_lbls = st.multiselect("Chốt bệnh:", STRUCTURED_LABELS, default=valid_defaults)
+                            
                             saved_rating = record.get("prompt_rating")
-                            # Nếu giá trị trong DB không nằm trong list cho phép, lấy mặc định "Khá"
                             safe_rating = saved_rating if saved_rating in RATING_OPTS else "Khá"
-                            
                             rating = st.select_slider("Prompt:", options=RATING_OPTS, value=safe_rating)
                             
                             if st.button("💾 LƯU VÒNG 1"):
@@ -360,7 +409,11 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                             st.info(f"✅ Vòng 1: {fb1}")
                             st.markdown('<div class="step-badge" style="background:#c62828">VÒNG 2</div>', unsafe_allow_html=True)
                             new_fb2 = st.radio("Đánh giá cuối:", FEEDBACK_OPTS, index=0, key="fb2")
-                            new_lbls2 = st.multiselect("CHỐT BỆNH ÁN:", VN_LABELS_LIST, default=[l.strip() for l in (record.get("label_2") or "").split(";") if l], key="lbl2")
+                            
+                            saved_lbls2 = [l.strip() for l in (record.get("label_2") or "").split(";") if l]
+                            valid_defaults2 = [l for l in saved_lbls2 if l in STRUCTURED_LABELS]
+                            new_lbls2 = st.multiselect("CHỐT BỆNH ÁN:", STRUCTURED_LABELS, default=valid_defaults2, key="lbl2")
+                            
                             if st.button("💾 LƯU HỒ SƠ"):
                                 save_log({"id": selected_id, "feedback_2": new_fb2, "label_2": "; ".join(new_lbls2)})
                                 st.success("Đã chốt!"); time.sleep(0.5); st.rerun()
