@@ -4,23 +4,21 @@ import sys
 import time
 
 # --- 🛠️ TỰ ĐỘNG SỬA LỖI THƯ VIỆN (AUTO-FIX) ---
-# Đoạn này sẽ chạy đầu tiên để ép cập nhật google-generativeai
 try:
     import google.generativeai as genai
-    # Kiểm tra version, nếu cũ quá thì update
     version = getattr(genai, '__version__', '0.0.0')
     if version < '0.7.0':
-        st.toast("🔄 Đang cập nhật thư viện AI... Vui lòng chờ 10s...", icon="⚙️")
+        st.toast("🔄 Updating AI library...", icon="⚙️")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "google-generativeai"])
-        st.toast("✅ Đã cập nhật xong! Đang khởi động lại...", icon="🚀")
-        time.sleep(2)
+        st.toast("✅ Done! Restarting...", icon="🚀")
+        time.sleep(1)
         st.rerun()
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
     st.rerun()
 
 # ==================================================
-# TỪ ĐÂY LÀ CODE CHÍNH (V32.4)
+# CODE CHÍNH (V32.5 - FIX CRASH)
 # ==================================================
 import cv2
 import numpy as np
@@ -37,7 +35,7 @@ from supabase import create_client, Client
 import requests
 from io import BytesIO
 
-st.set_page_config(page_title="AI Hospital (V32.4 - Auto Fix)", page_icon="🏥", layout="wide")
+st.set_page_config(page_title="AI Hospital (V32.5 - Stable)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
@@ -67,6 +65,7 @@ LABEL_MAP = {
 VN_LABELS_LIST = list(LABEL_MAP.values())
 TECHNICAL_OPTS = ["✅ Phim đạt chuẩn", "⚠️ Chụp tại giường (AP)", "⚠️ Hít vào nông", "⚠️ Bệnh nhân xoay", "⚠️ Tia cứng/mềm", "⚠️ Dị vật/Áo"]
 FEEDBACK_OPTS = ["Chưa đánh giá", "✅ Đồng thuận (AI Đúng)", "⚠️ Dương tính giả (AI Báo thừa)", "⚠️ Âm tính giả (AI Bỏ sót)", "❌ Sai hoàn toàn"]
+RATING_OPTS = ["Tệ", "TB", "Khá", "Tốt", "Xuất sắc"]
 
 # --- KẾT NỐI SUPABASE ---
 @st.cache_resource
@@ -126,34 +125,24 @@ def get_logs():
         return pd.DataFrame(response.data)
     except: return pd.DataFrame()
 
-# --- GEMINI (V32.4 - AUTO DISCOVERY) ---
-# Hàm này thông minh hơn: Nó sẽ hỏi Google "Mày có model nào?" rồi mới dùng
+# --- GEMINI (V32.5 - AUTO DISCOVERY) ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     if not api_key: return {"labels": [], "reasoning": "Thiếu API Key"}
     
     try:
         genai.configure(api_key=api_key)
         
-        # 1. TỰ ĐỘNG TÌM MODEL KHẢ DỤNG (QUAN TRỌNG)
-        available_models = []
+        # Auto-discover models
+        target_model = "gemini-1.5-flash"
         try:
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    available_models.append(m.name)
+            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            candidates = [m for m in available_models if "gemini" in m]
+            if candidates:
+                if any("1.5-flash" in m for m in candidates): target_model = "gemini-1.5-flash"
+                else: target_model = candidates[0].replace("models/", "")
         except: pass
-        
-        # Ưu tiên Flash -> Pro -> Bất kỳ cái nào có chữ 'gemini'
-        target_model = "gemini-1.5-flash" # Mặc định
-        
-        # Lọc thông minh
-        gemini_candidates = [m for m in available_models if "gemini" in m]
-        if gemini_candidates:
-            # Nếu có 1.5 flash thì dùng
-            if any("1.5-flash" in m for m in gemini_candidates): target_model = "gemini-1.5-flash"
-            # Nếu không thì dùng cái đầu tiên tìm thấy
-            else: target_model = gemini_candidates[0].replace("models/", "")
             
-        st.toast(f"🤖 Đang dùng Model: {target_model}") # Báo cho người dùng biết
+        st.toast(f"🤖 Model: {target_model}") 
 
         labels_str = ", ".join(ALLOWED_LABELS) 
         tech_note = ", ".join(tags) if tags else "Chuẩn."
@@ -356,7 +345,14 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                             st.markdown('<div class="step-badge">VÒNG 1</div>', unsafe_allow_html=True)
                             new_fb = st.radio("Đánh giá AI:", FEEDBACK_OPTS, index=0)
                             new_lbls = st.multiselect("Chốt bệnh:", VN_LABELS_LIST, default=[l.strip() for l in (record.get("label_1") or "").split(";") if l])
-                            rating = st.select_slider("Prompt:", options=["Tệ", "TB", "Khá", "Tốt", "Xuất sắc"], value=record.get("prompt_rating", "Khá"))
+                            
+                            # --- FIX VALUE ERROR HERE ---
+                            saved_rating = record.get("prompt_rating")
+                            # Nếu giá trị trong DB không nằm trong list cho phép, lấy mặc định "Khá"
+                            safe_rating = saved_rating if saved_rating in RATING_OPTS else "Khá"
+                            
+                            rating = st.select_slider("Prompt:", options=RATING_OPTS, value=safe_rating)
+                            
                             if st.button("💾 LƯU VÒNG 1"):
                                 save_log({"id": selected_id, "clinical_context": ctx, "expert_note": note, "prompt_guidance": guide, "technical_tags": "; ".join(tags), "feedback_1": new_fb, "label_1": "; ".join(new_lbls), "prompt_rating": rating})
                                 st.success("Đã lưu!"); time.sleep(0.5); st.rerun()
