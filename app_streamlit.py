@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import os
-import torch  # <--- ĐÃ BỔ SUNG THƯ VIỆN NÀY
+import torch
 import time
 from datetime import datetime
 from PIL import Image
@@ -58,7 +58,6 @@ DOCTOR_ROSTER = {
 # ================= 2. CORE FUNCTIONS =================
 @st.cache_resource
 def load_models():
-    # Dòng này gây lỗi trước đó nếu thiếu import torch
     device = 0 if torch.cuda.is_available() else 'cpu'
     loaded_models = {}
     for role, filename in DOCTOR_ROSTER.items():
@@ -72,20 +71,17 @@ MODELS, MODEL_STATUS, DEVICE = load_models()
 
 # --- SUPABASE FUNCTIONS ---
 def upload_image(img_cv, filename):
-    """Upload ảnh lên Supabase Storage"""
     try:
         _, buffer = cv2.imencode('.jpg', cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR))
         bucket = "xray_images"
-        # Upload (ghi đè nếu trùng tên)
         supabase.storage.from_(bucket).upload(filename, buffer.tobytes(), {"content-type": "image/jpeg", "upsert": "true"})
-        # Lấy Public URL
         return supabase.storage.from_(bucket).get_public_url(filename)
     except Exception as e:
-        st.error(f"Lỗi Upload: {e}")
-        return None
+        # Nếu lỗi (ví dụ file đã tồn tại), cố gắng lấy URL public
+        try: return supabase.storage.from_("xray_images").get_public_url(filename)
+        except: return None
 
 def save_log(data):
-    """Lưu/Cập nhật dữ liệu vào bảng logs"""
     try:
         supabase.table("logs").upsert(data).execute()
         return True
@@ -94,7 +90,6 @@ def save_log(data):
         return False
 
 def get_logs():
-    """Lấy toàn bộ dữ liệu"""
     try:
         response = supabase.table("logs").select("*").order("created_at", desc=True).execute()
         return pd.DataFrame(response.data)
@@ -151,9 +146,11 @@ def get_finding_text(disease, conf, location):
     if pct > 75: return "danger", f"{location}: {disease} ({pct:.0f}%)"
     return "warn", f"{location}: Nghi ngờ {disease} ({pct:.0f}%)"
 
-# --- YOLO + UPLOAD PROCESS ---
+# --- YOLO PROCESS & SAVE ---
 def process_and_save(image_file):
-    if "ANATOMY" not in MODELS: return None, "Thiếu Model", False, 0, "", ""
+    # --- SỬA LỖI VALUE ERROR: Đảm bảo luôn trả về 4 giá trị ---
+    if "ANATOMY" not in MODELS: 
+        return None, {"Error": "Chưa tải được Model AI (Anatomy)"}, False, None
     
     start_t = time.time()
     filename = image_file.name.lower()
@@ -161,13 +158,18 @@ def process_and_save(image_file):
     
     if filename.endswith(('.dcm', '.dicom')):
         img_rgb, p_info = read_dicom_image(image_file)
-        if img_rgb is None: return None, p_info, False, 0, "", ""
+        if img_rgb is None: 
+            return None, {"Error": f"Lỗi đọc DICOM: {p_info}"}, False, None
         patient_info = p_info
     else:
         file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
         img_cv = cv2.imdecode(file_bytes, 1)
         img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
     
+    if img_rgb is None:
+        return None, {"Error": "Không đọc được file ảnh"}, False, None
+
+    # Resize để xử lý nhanh
     h, w = img_rgb.shape[:2]
     scale = 1280 / max(h, w)
     img_resized = cv2.resize(img_rgb, (int(w*scale), int(h*scale)))
@@ -184,6 +186,8 @@ def process_and_save(image_file):
         cls_id = int(box.cls[0])
         region = anatomy_res.names[cls_id]
         x1, y1, x2, y2 = coords
+        
+        # Cắt vùng quan tâm (ROI)
         roi = img_bgr[max(0, y1-40):min(h, y2+40), max(0, x1-40):min(w, x2+40)]
         if roi.size == 0: continue
         
@@ -210,6 +214,8 @@ def process_and_save(image_file):
     # UPLOAD & SAVE TO SUPABASE
     img_id = datetime.now().strftime("%d%m%Y%H%M%S")
     file_name = f"XRAY_{img_id}.jpg"
+    
+    # Upload ảnh lên Storage
     img_url = upload_image(display_img, file_name)
     
     if img_url:
@@ -224,7 +230,8 @@ def process_and_save(image_file):
             "feedback_2": "Chưa đánh giá"
         }
         save_log(data)
-        
+    
+    # TRẢ VỀ ĐÚNG 4 GIÁ TRỊ
     return display_img, findings_db, has_danger, img_id
 
 # ================= 3. GIAO DIỆN CHÍNH =================
@@ -243,12 +250,20 @@ if mode == "🔍 Upload & Phân Tích":
             with col2:
                 with st.spinner("Đang chạy YOLO & Upload Supabase..."):
                     img_out, findings, danger, img_id = process_and_save(uploaded_file)
+                    
                     if img_out is not None:
                         st.image(img_out, caption=f"ID: {img_id}", use_container_width=True)
                         if danger: st.error("🔴 PHÁT HIỆN BẤT THƯỜNG")
                         else: st.success("✅ HÌNH ẢNH BÌNH THƯỜNG")
-                        st.json(findings)
-                        st.toast("Đã lưu vào Cloud!", icon="☁️")
+                        
+                        # Hiển thị chi tiết lỗi nếu có (dạng dict từ findings)
+                        if isinstance(findings, dict) and "Error" in findings:
+                            st.error(findings["Error"])
+                        else:
+                            st.json(findings)
+                            st.toast("Đã lưu vào Cloud!", icon="☁️")
+                    else:
+                        st.error("Không thể xử lý ảnh.")
 
 elif mode == "📂 Hội Chẩn & Labeling":
     st.title("📂 DATA LABELING (SUPABASE)")
