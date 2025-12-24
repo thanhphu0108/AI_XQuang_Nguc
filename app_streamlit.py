@@ -10,12 +10,12 @@ from PIL import Image
 import pandas as pd
 import pydicom
 import json
-import ast # Thư viện quan trọng để fix lỗi hiển thị HTML từ DB
+import ast 
 import google.generativeai as genai
 from supabase import create_client, Client
 
 # ================= 1. CẤU HÌNH & CSS A4 CHUẨN =================
-st.set_page_config(page_title="AI Hospital (V31.0 - Stable)", page_icon="🏥", layout="wide")
+st.set_page_config(page_title="AI Hospital (V31.1 - Stable)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
@@ -25,72 +25,68 @@ st.markdown("""
     .a4-paper {
         background-color: white;
         width: 100%;
-        max-width: 210mm; /* Khổ A4 chuẩn */
-        min-height: 297mm;
+        max-width: 800px;
         margin: 0 auto;
-        padding: 20mm;
-        box-shadow: 0 0 15px rgba(0,0,0,0.1);
+        padding: 40px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
         font-family: 'Times New Roman', serif;
         color: #000;
+        border: 1px solid #ccc;
     }
     
     .hospital-header {
         text-align: center;
         border-bottom: 2px solid #000;
-        padding-bottom: 10px;
+        padding-bottom: 15px;
         margin-bottom: 20px;
     }
-    .hospital-header h1 { margin: 0; font-size: 24px; text-transform: uppercase; font-weight: bold; color: #002f6c; }
-    .hospital-header p { margin: 5px 0; font-style: italic; font-size: 14px; }
+    .hospital-header h1 { margin: 0; font-size: 22px; text-transform: uppercase; font-weight: bold; color: #002f6c; }
     
-    .info-table { width: 100%; margin-bottom: 20px; border-collapse: collapse; font-size: 16px; }
-    .info-table td { padding: 8px 0; border-bottom: 1px dotted #ccc; vertical-align: top; }
+    .info-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    .info-table td { padding: 5px; border-bottom: 1px dotted #999; vertical-align: bottom; }
     
     .section-title {
         background-color: #f0f2f5;
-        padding: 5px 10px;
         font-weight: bold;
-        font-size: 16px;
-        color: #000;
+        padding: 8px;
         margin-top: 20px;
-        margin-bottom: 10px;
         border-left: 4px solid #002f6c;
         text-transform: uppercase;
+        font-size: 14px;
     }
-    
-    .finding-item { margin-bottom: 5px; }
-    .danger-text { color: #c62828; font-weight: bold; }
     
     .conclusion-box {
+        border: 2px solid #333;
         padding: 15px;
-        border: 2px solid #000;
-        margin-top: 30px;
+        margin-top: 20px;
         text-align: center;
         font-weight: bold;
-        font-size: 18px;
-    }
-    
-    .gemini-block {
-        margin-top: 15px;
-        padding: 10px;
-        background-color: #fffde7;
-        border: 1px dashed #fbc02d;
-        font-size: 14px;
-        font-style: italic;
     }
 
     .stButton>button { width: 100%; font-weight: bold; height: 45px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- KẾT NỐI SUPABASE ---
+# --- KẾT NỐI SUPABASE (CÓ BÁO LỖI CHI TIẾT) ---
 @st.cache_resource
 def init_supabase():
+    # 1. Kiểm tra Secrets
+    if "supabase" not in st.secrets:
+        st.error("⚠️ CẢNH BÁO: Chưa cấu hình [supabase] trong secrets.toml. App sẽ chạy chế độ Offline (Không lưu Cloud).")
+        return None
+    
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
+        
+        if not url or "http" not in url:
+            st.error("⚠️ Lỗi URL Supabase không hợp lệ.")
+            return None
+            
         return create_client(url, key)
-    except: return None
+    except Exception as e:
+        st.error(f"❌ LỖI KẾT NỐI SUPABASE: {e}")
+        return None
 
 supabase = init_supabase()
 
@@ -121,33 +117,41 @@ def load_models():
 
 MODELS, MODEL_STATUS, DEVICE = load_models()
 
-# --- SUPABASE UTILS ---
+# --- SUPABASE UTILS (AN TOÀN HƠN) ---
 def upload_image(img_cv, filename):
+    if supabase is None: return None # Chế độ Offline
+    
     try:
         _, buffer = cv2.imencode('.jpg', cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR))
         bucket = "xray_images"
         supabase.storage.from_(bucket).upload(filename, buffer.tobytes(), {"content-type": "image/jpeg", "upsert": "true"})
         return supabase.storage.from_(bucket).get_public_url(filename)
-    except:
+    except Exception as e:
+        # Fallback nếu file đã tồn tại
         try: return supabase.storage.from_("xray_images").get_public_url(filename)
         except: return None
 
 def save_log(data):
-    """Lưu dữ liệu vào bảng logs"""
+    if supabase is None: 
+        st.warning("⚠️ Đang chạy Offline: Kết quả không được lưu vào Cloud.")
+        return False
+        
     try:
-        response = supabase.table("logs").upsert(data).execute()
+        supabase.table("logs").upsert(data).execute()
         return True
     except Exception as e:
-        st.error(f"❌ Lỗi lưu Data: {e}") # Hiện lỗi rõ ràng
+        st.error(f"❌ Lỗi lưu Data: {e}")
         return False
 
 def get_logs():
-    """Lấy dữ liệu từ bảng logs"""
+    if supabase is None:
+        return pd.DataFrame()
+        
     try:
         response = supabase.table("logs").select("*").order("created_at", desc=True).execute()
         return pd.DataFrame(response.data)
     except Exception as e:
-        st.error(f"❌ Lỗi tải Data: {e}") # Hiện lỗi rõ ràng
+        st.error(f"❌ Lỗi tải Data: {e}")
         return pd.DataFrame()
 
 # --- GEMINI ---
@@ -161,49 +165,46 @@ def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
         return json.loads(response.text)
     except: return {}
 
-# --- HTML REPORT GENERATOR (FIXED PARSING) ---
+# --- HTML REPORT GENERATOR ---
 def generate_html_report(findings_input, has_danger, patient_info, img_id, gemini_text=""):
     current_time = datetime.now().strftime('%H:%M ngày %d/%m/%Y')
     
-    # --- FIX QUAN TRỌNG: CHUYỂN STRING TỪ DB THÀNH DICT ---
     findings_db = {"Lung": [], "Pleura": [], "Heart": []}
     
+    # Xử lý input an toàn
     if isinstance(findings_input, dict):
         findings_db = findings_input
     elif isinstance(findings_input, str):
-        try:
-            # Dùng ast.literal_eval an toàn hơn eval thường
-            findings_db = ast.literal_eval(findings_input)
-        except:
-            pass # Nếu lỗi parse thì giữ nguyên rỗng
+        try: findings_db = ast.literal_eval(findings_input)
+        except: pass
             
-    # Tạo HTML list
-    def make_list(items, default_text):
-        if not items: return f'<ul style="margin:5px 0 10px 20px;"><li>{default_text}</li></ul>'
-        return f'<ul style="margin:5px 0 10px 20px; color:#c62828;"><li><b>BẤT THƯỜNG:</b> {"; ".join(items)}</li></ul>'
+    # Hàm tạo list HTML
+    def make_list(items, default):
+        if not items: return f'<ul style="margin:5px 0 10px 20px;"><li>{default}</li></ul>'
+        return f'<ul style="margin:5px 0 10px 20px; color:#c62828;"><li><b>PHÁT HIỆN:</b> {"; ".join(items)}</li></ul>'
 
-    lung_html = make_list(findings_db.get("Lung"), "Hai trường phổi sáng đều. Không có đám mờ.")
-    pleura_html = make_list(findings_db.get("Pleura"), "Góc sườn hoành nhọn. Không tràn dịch/khí.")
+    lung_html = make_list(findings_db.get("Lung"), "Hai trường phổi sáng đều. Không đám mờ.")
+    pleura_html = make_list(findings_db.get("Pleura"), "Góc sườn hoành nhọn. Không tràn dịch.")
     heart_html = make_list(findings_db.get("Heart"), "Bóng tim không to. Trung thất cân đối.")
     bone_html = '<ul style="margin:5px 0 10px 20px;"><li>Khung xương lồng ngực cân đối.</li></ul>'
     
-    # Kết luận logic
-    is_abnormal = has_danger or (len(findings_db.get("Lung", [])) + len(findings_db.get("Pleura", [])) + len(findings_db.get("Heart", [])) > 0) or ("BẤT THƯỜNG" in str(has_danger))
+    is_abnormal = has_danger or (len(findings_db.get("Lung", [])) + len(findings_db.get("Pleura", [])) + len(findings_db.get("Heart", [])) > 0)
     
     if is_abnormal:
-        conclusion_html = """<div style='color:#c62828;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG</div>"""
+        conclusion_html = """<div style='color:#c62828; font-size:18px;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG</div>"""
     else:
-        conclusion_html = """<div style='color:#2e7d32;'>✅ KẾT LUẬN: CHƯA GHI NHẬN BẤT THƯỜNG</div>"""
+        conclusion_html = """<div style='color:#2e7d32; font-size:18px;'>✅ KẾT LUẬN: CHƯA GHI NHẬN BẤT THƯỜNG</div>"""
 
     gemini_block = ""
     if gemini_text:
-        gemini_block = f"""<div class="gemini-block"><b>🤖 Gemini Note:</b> {gemini_text}</div>"""
+        gemini_block = f"""<div style="margin-top:15px; padding:10px; background:#fffde7; border:1px dashed orange; font-style:italic;"><b>🤖 Gemini:</b> {gemini_text}</div>"""
 
+    # HTML
     html = f"""
     <div class="a4-paper">
         <div class="hospital-header">
             <h1>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h1>
-            <p>Khoa Chẩn Đoán Hình Ảnh - Hệ thống AI Hỗ trợ</p>
+            <p>Hệ thống AI Hỗ trợ Chẩn đoán X-quang Ngực</p>
         </div>
         
         <table class="info-table">
@@ -237,7 +238,7 @@ def generate_html_report(findings_input, has_danger, patient_info, img_id, gemin
     """
     return html
 
-# --- PROCESS & SAVE ---
+# --- PROCESS ---
 def process_and_save(image_file):
     start_t = time.time()
     filename = image_file.name.lower()
@@ -304,14 +305,14 @@ def process_and_save(image_file):
     img_id = datetime.now().strftime("%d%m%Y%H%M%S")
     img_url = upload_image(display_img, f"XRAY_{img_id}.jpg")
     
+    # Chỉ lưu nếu có kết nối Supabase
     if img_url:
-        # Convert findings_db to string explicitly for storage
         save_log({
             "id": img_id, 
             "created_at": datetime.now().isoformat(), 
             "image_url": img_url, 
             "result": "BẤT THƯỜNG" if has_danger else "BÌNH THƯỜNG", 
-            "details": str(findings_db), # LƯU DẠNG CHUỖI
+            "details": str(findings_db), 
             "patient_info": patient_info
         })
 
@@ -342,58 +343,61 @@ if mode == "🔍 Phân Tích & In Phiếu":
                             if api_key:
                                 res = ask_gemini(api_key, pil_img)
                                 gemini_txt = res.get("reasoning", "")
-                                if gemini_txt: save_log({"id": img_id, "ai_reasoning": gemini_txt})
+                                if gemini_txt and supabase: save_log({"id": img_id, "ai_reasoning": gemini_txt})
                             
                             html = generate_html_report(findings, danger, "Nguyễn Văn A", img_id, gemini_txt)
                             st.markdown(html, unsafe_allow_html=True)
-                        st.success("✅ Đã lưu vào Cloud!")
+                        
+                        if supabase: st.success("✅ Đã lưu vào Cloud!")
+                        else: st.warning("⚠️ Đang chạy chế độ Offline (Chưa lưu Cloud).")
                     else: st.error("Lỗi xử lý")
 
 elif mode == "📂 Hội Chẩn (Cloud)":
     st.title("📂 HỒ SƠ BỆNH ÁN CLOUD")
-    df = get_logs()
-    
-    if not df.empty:
-        df = df.fillna("")
-        # Sắp xếp mới nhất lên đầu
-        id_list = df['id'].tolist()
-        selected_id = st.selectbox("👉 Chọn Mã Hồ Sơ:", id_list)
-        
-        if selected_id:
-            record = df[df["id"] == selected_id].iloc[0]
-            
-            t_work, t_paper = st.tabs(["👨‍⚕️ Bàn Làm Việc", "📄 Xem Phiếu A4"])
-            
-            with t_work:
-                c1, c2 = st.columns([1, 1])
-                with c1:
-                    if record.get('image_url'): st.image(record['image_url'], use_container_width=True)
-                with c2:
-                    st.info(f"BN: {record.get('patient_info')}")
-                    st.write(f"**Kết quả AI:** {record.get('result')}")
-                    
-                    ctx = st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "")
-                    if st.button("💾 Cập nhật"):
-                        save_log({"id": selected_id, "clinical_context": ctx})
-                        st.success("Đã lưu!")
-            
-            with t_paper:
-                # Fix lỗi hiển thị HTML ở đây
-                raw_details = record.get("details", "")
-                is_danger = record.get("result") == "BẤT THƯỜNG"
-                p_info = record.get("patient_info", "N/A")
-                gemini_old = record.get("ai_reasoning", "")
-                
-                html_repro = generate_html_report(raw_details, is_danger, p_info, selected_id, gemini_old)
-                st.markdown(html_repro, unsafe_allow_html=True)
+    if supabase is None:
+        st.error("⛔ Bạn chưa kết nối Supabase. Vui lòng kiểm tra lại secrets.toml")
     else:
-        st.warning("📭 Chưa có dữ liệu trên Cloud (Hãy upload ảnh ở tab Phân Tích trước)")
+        df = get_logs()
+        if not df.empty:
+            df = df.fillna("")
+            id_list = df['id'].tolist()
+            selected_id = st.selectbox("👉 Chọn Mã Hồ Sơ:", id_list)
+            
+            if selected_id:
+                record = df[df["id"] == selected_id].iloc[0]
+                
+                t_work, t_paper = st.tabs(["👨‍⚕️ Bàn Làm Việc", "📄 Xem Phiếu A4"])
+                
+                with t_work:
+                    c1, c2 = st.columns([1, 1])
+                    with c1:
+                        if record.get('image_url'): st.image(record['image_url'], use_container_width=True)
+                    with c2:
+                        st.info(f"BN: {record.get('patient_info')}")
+                        st.write(f"**Kết quả AI:** {record.get('result')}")
+                        ctx = st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "")
+                        if st.button("💾 Cập nhật"):
+                            save_log({"id": selected_id, "clinical_context": ctx})
+                            st.success("Đã lưu!")
+                
+                with t_paper:
+                    raw_details = record.get("details", "")
+                    is_danger = record.get("result") == "BẤT THƯỜNG"
+                    p_info = record.get("patient_info", "N/A")
+                    gemini_old = record.get("ai_reasoning", "")
+                    html_repro = generate_html_report(raw_details, is_danger, p_info, selected_id, gemini_old)
+                    st.markdown(html_repro, unsafe_allow_html=True)
+        else:
+            st.warning("📭 Chưa có dữ liệu trên Cloud.")
 
 elif mode == "🛠️ Xuất Dataset":
     st.title("🛠️ DATASET")
-    df = get_logs()
-    if not df.empty:
-        st.dataframe(df) # Hiện bảng dữ liệu ra cho bác xem luôn
-        st.download_button("📥 Tải File CSV", df.to_csv(index=False).encode('utf-8'), "data.csv", "text/csv")
+    if supabase:
+        df = get_logs()
+        if not df.empty:
+            st.dataframe(df)
+            st.download_button("📥 Tải File CSV", df.to_csv(index=False).encode('utf-8'), "data.csv", "text/csv")
+        else:
+            st.warning("Chưa có dữ liệu.")
     else:
-        st.error("Chưa có dữ liệu.")
+        st.error("⛔ Cần kết nối Supabase để tải dữ liệu.")
