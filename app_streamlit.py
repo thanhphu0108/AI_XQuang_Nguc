@@ -10,50 +10,79 @@ from PIL import Image
 import pandas as pd
 import pydicom
 import json
+import ast # Dùng để convert chuỗi lưu trong DB thành Dict
 import google.generativeai as genai
 from supabase import create_client, Client
 
-# ================= 1. CẤU HÌNH & CSS A4 =================
-st.set_page_config(page_title="AI Hospital (V30.0 - Report A4)", page_icon="🩻", layout="wide")
+# ================= 1. CẤU HÌNH & CSS XỊN =================
+st.set_page_config(page_title="AI Hospital (V30.2 - Cloud Pro)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
-    .main { background-color: #f4f6f9; }
+    .main { background-color: #e9ecef; }
     
-    /* CSS CHO PHIẾU KẾT QUẢ A4 */
-    .report-container {
+    /* KHUNG GIẤY A4 */
+    .a4-paper {
         background-color: white;
+        width: 100%;
+        max-width: 800px;
+        margin: 0 auto;
         padding: 40px;
-        border-radius: 5px;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         font-family: 'Times New Roman', serif;
         color: #333;
-        border: 1px solid #ddd;
     }
+    
     .hospital-header {
         text-align: center;
-        border-bottom: 2px solid #002f6c;
-        padding-bottom: 10px;
-        margin-bottom: 20px;
+        border-bottom: 3px double #002f6c;
+        padding-bottom: 15px;
+        margin-bottom: 25px;
     }
-    .hospital-header h2 { color: #002f6c; margin: 0; text-transform: uppercase; font-weight: bold; }
-    .hospital-header p { margin: 5px 0; font-style: italic; color: #666; }
+    .hospital-header h1 { color: #002f6c; margin: 0; font-size: 24px; text-transform: uppercase; font-weight: 900; }
     
-    .info-table { width: 100%; margin-bottom: 20px; border-collapse: collapse; }
-    .info-table td { padding: 8px; border-bottom: 1px solid #eee; }
+    .info-table { width: 100%; margin-bottom: 20px; border-collapse: collapse; font-size: 15px; }
+    .info-table td { padding: 8px 5px; border-bottom: 1px solid #eee; vertical-align: top; }
     
     .section-header {
         background-color: #e3f2fd;
-        padding: 5px 10px;
+        padding: 8px 15px;
         font-weight: bold;
+        font-size: 16px;
         color: #002f6c;
-        margin-top: 20px;
-        margin-bottom: 10px;
+        margin-top: 25px;
+        margin-bottom: 15px;
         border-left: 5px solid #002f6c;
+        text-transform: uppercase;
     }
     
-    .stButton>button { width: 100%; font-weight: bold; height: 50px; font-size: 16px; }
-    .gemini-box { background-color: #fff3e0; padding: 15px; border-radius: 5px; border: 1px solid #ff9800; margin-top: 15px; }
+    .conclusion-box {
+        padding: 20px;
+        border: 2px solid #ccc;
+        margin-bottom: 20px;
+        background-color: #fafafa;
+        text-align: center;
+    }
+    
+    .gemini-block {
+        background-color: #fff8e1;
+        border: 1px dashed #ff8f00;
+        padding: 15px;
+        margin-top: 15px;
+        border-radius: 5px;
+        text-align: left;
+        font-size: 14px;
+    }
+    
+    .stButton>button { width: 100%; font-weight: bold; height: 45px; }
+    
+    /* Box cho phần Hội chẩn */
+    .workstation-box {
+        background-color: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -95,7 +124,7 @@ def load_models():
 
 MODELS, MODEL_STATUS, DEVICE = load_models()
 
-# --- SUPABASE UPLOAD ---
+# --- SUPABASE UTILS ---
 def upload_image(img_cv, filename):
     try:
         _, buffer = cv2.imencode('.jpg', cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR))
@@ -129,74 +158,85 @@ def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
         return json.loads(response.text)
     except: return {}
 
-# --- TẠO PHIẾU KẾT QUẢ A4 (HÀM CŨ ĐÃ QUAY LẠI) ---
+# --- HTML REPORT GENERATOR (A4 STYLE) ---
 def generate_html_report(findings_db, has_danger, patient_info, img_id, gemini_text=""):
     current_time = datetime.now().strftime('%H:%M ngày %d/%m/%Y')
     
-    # Tạo nội dung HTML cho từng phần
+    # Xử lý input findings_db (vì từ DB nó là chuỗi string)
+    if isinstance(findings_db, str):
+        try: findings_db = ast.literal_eval(findings_db)
+        except: findings_db = {"Lung": [], "Pleura": [], "Heart": []}
+    
     lung_html = """<ul style="margin-top:0px; padding-left:20px;"><li>Hai trường phổi sáng đều.</li><li>Không ghi nhận đám mờ khu trú hay lan tỏa.</li></ul>"""
-    if findings_db["Lung"]: lung_html = f'<ul style="margin-top:0px; padding-left:20px; color:#c62828;"><li><b>Ghi nhận bất thường:</b> {"; ".join(findings_db["Lung"])}</li></ul>'
+    if findings_db.get("Lung"): lung_html = f'<ul style="margin-top:0px; padding-left:20px; color:#c62828;"><li><b>Ghi nhận bất thường:</b> {"; ".join(findings_db["Lung"])}</li></ul>'
     
     pleura_html = """<ul style="margin-top:0px; padding-left:20px;"><li>Góc sườn hoành hai bên nhọn, sáng.</li><li>Không thấy hình ảnh tràn dịch, tràn khí màng phổi.</li></ul>"""
-    if findings_db["Pleura"]: pleura_html = f'<ul style="margin-top:0px; padding-left:20px; color:#c62828;"><li><b>Phát hiện bất thường:</b> {"; ".join(findings_db["Pleura"])}</li></ul>'
+    if findings_db.get("Pleura"): pleura_html = f'<ul style="margin-top:0px; padding-left:20px; color:#c62828;"><li><b>Phát hiện bất thường:</b> {"; ".join(findings_db["Pleura"])}</li></ul>'
     
     heart_html = """<ul style="margin-top:0px; padding-left:20px;"><li>Bóng tim không to, chỉ số tim/lồng ngực (CTR) < 0,5.</li><li>Trung thất cân đối.</li></ul>"""
-    if findings_db["Heart"]: heart_html = f'<ul style="margin-top:0px; padding-left:20px; color:#e65100;"><li><b>Tim mạch:</b> {"; ".join(findings_db["Heart"])}</li></ul>'
+    if findings_db.get("Heart"): heart_html = f'<ul style="margin-top:0px; padding-left:20px; color:#e65100;"><li><b>Tim mạch:</b> {"; ".join(findings_db["Heart"])}</li></ul>'
     
     bone_html = """<ul style="margin-top:0px; padding-left:20px;"><li>Khung xương lồng ngực cân đối, không thấy đường gãy xương sườn/xương đòn.</li></ul>"""
     
-    if has_danger or (len(findings_db["Lung"]) + len(findings_db["Pleura"]) > 0):
-        conclusion_html = """<div style='color:#c62828; font-weight:bold; font-size:18px; margin-bottom:10px; text-transform: uppercase;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG TRÊN PHIM X-QUANG</div>"""
+    # Logic kết luận
+    is_abnormal = has_danger or (len(findings_db.get("Lung", [])) + len(findings_db.get("Pleura", [])) > 0) or ("BẤT THƯỜNG" in str(has_danger)) # Fix logic
+    
+    if is_abnormal:
+        conclusion_html = """<div style='color:#c62828; font-weight:900; font-size:20px; margin-bottom:5px; text-transform: uppercase;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG</div>"""
     else:
-        conclusion_html = """<div style='color:#2e7d32; font-weight:bold; font-size:18px; margin-bottom:10px; text-transform: uppercase;'>✅ KẾT LUẬN: CHƯA GHI NHẬN BẤT THƯỜNG TRÊN PHIM</div>"""
+        conclusion_html = """<div style='color:#2e7d32; font-weight:900; font-size:20px; margin-bottom:5px; text-transform: uppercase;'>✅ KẾT LUẬN: CHƯA GHI NHẬN BẤT THƯỜNG</div>"""
 
     gemini_block = ""
     if gemini_text:
-        gemini_block = f"""<div style="background:#fff3e0; padding:10px; border:1px dashed orange; margin-top:10px;"><b>🤖 Ý kiến tham khảo từ Gemini:</b><br><i>{gemini_text}</i></div>"""
+        gemini_block = f"""<div class="gemini-block"><b>🤖 Ý kiến tham khảo từ Gemini:</b><br><i>"{gemini_text}"</i></div>"""
 
     html = f"""
-    <div class="report-container">
+    <div class="a4-paper">
         <div class="hospital-header">
-            <h2>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h2>
-            <p>(Hệ thống AI Hỗ trợ Chẩn đoán X-quang Ngực)</p>
+            <h1>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h1>
+            <p>Hệ thống AI Hỗ trợ Chẩn đoán X-quang Ngực</p>
         </div>
         
         <table class="info-table">
             <tr>
                 <td style="width:60%;"><strong>Họ và tên:</strong> {patient_info}</td>
-                <td style="text-align:right;"><strong>ID Hồ sơ:</strong> {img_id}</td>
+                <td style="text-align:right;"><strong>Mã hồ sơ:</strong> {img_id}</td>
             </tr>
             <tr>
                 <td><strong>Chỉ định:</strong> Chụp X-quang ngực thẳng (PA)</td>
-                <td style="text-align:right;"><strong>Ngày chụp:</strong> {current_time}</td>
+                <td style="text-align:right;"><strong>Thời gian:</strong> {current_time}</td>
             </tr>
         </table>
 
         <div class="section-header">I. MÔ TẢ HÌNH ẢNH (AI FINDINGS)</div>
-        <p style="margin-bottom:5px;"><strong>1. Nhu mô phổi</strong></p>{lung_html}
-        <p style="margin-bottom:5px;"><strong>2. Màng phổi</strong></p>{pleura_html}
-        <p style="margin-bottom:5px;"><strong>3. Tim – Trung thất</strong></p>{heart_html}
-        <p style="margin-bottom:5px;"><strong>4. Hệ xương thành ngực</strong></p>{bone_html}
+        <p><strong>1. Nhu mô phổi</strong></p>{lung_html}
+        <p><strong>2. Màng phổi</strong></p>{pleura_html}
+        <p><strong>3. Tim – Trung thất</strong></p>{heart_html}
+        <p><strong>4. Hệ xương thành ngực</strong></p>{bone_html}
 
-        <div class="section-header" style="margin-top:25px;">II. KẾT LUẬN & KHUYẾN NGHỊ</div>
-        <div style="padding:15px; border:2px solid #ccc; margin-bottom:15px; background:#fafafa;">
+        <div class="section-header">II. KẾT LUẬN & KHUYẾN NGHỊ</div>
+        <div class="conclusion-box">
             {conclusion_html}
             {gemini_block}
         </div>
-        <p style="font-size:12px; font-style:italic; text-align:center;">* Kết quả này do AI hỗ trợ, vui lòng kết hợp lâm sàng và ý kiến bác sĩ chuyên khoa.</p>
+        
+        <div class="footer">
+            <div style="text-align:center; font-style:italic; font-size:12px; margin-top:30px; border-top:1px solid #ddd; padding-top:10px;">
+                * Kết quả này do AI hỗ trợ phân tích, vui lòng kết hợp lâm sàng và ý kiến bác sĩ chuyên khoa.
+            </div>
+        </div>
     </div>
     """
     return html
 
-# --- PROCESS & SAVE (UNIVERSAL) ---
+# --- PROCESS & SAVE ---
 def process_and_save(image_file):
     start_t = time.time()
     filename = image_file.name.lower()
-    img_rgb, patient_info = None, "Ẩn danh"
+    img_rgb, patient_info = None, "Nguyễn Văn A (Demo)"
     
     image_file.seek(0)
     
-    # Đọc ảnh
     if filename.endswith(('.dcm', '.dicom')):
         try:
             ds = pydicom.dcmread(image_file)
@@ -223,7 +263,6 @@ def process_and_save(image_file):
     findings_db = {"Lung": [], "Pleura": [], "Heart": []}
     has_danger = False
 
-    # Chạy YOLO
     if "ANATOMY" in MODELS:
         try:
             img_bgr = cv2.cvtColor(img_resized, cv2.COLOR_RGB2BGR)
@@ -249,14 +288,12 @@ def process_and_save(image_file):
                             if "HEART" in spec: findings_db["Heart"].append(text)
                             elif "PLEURA" in spec or "EFFUSION" in spec: findings_db["Pleura"].append(text)
                             else: findings_db["Lung"].append(text)
-                            
                             color = (255, 0, 0) if pct > 75 else (0, 165, 255)
                             cv2.rectangle(display_img, (x1, y1), (x2, y2), color, 2)
                             cv2.putText(display_img, spec[:4], (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         except: pass
     else: findings_db["Lung"].append("Chế độ Test (No Model)")
 
-    # Upload
     img_id = datetime.now().strftime("%d%m%Y%H%M%S")
     img_url = upload_image(display_img, f"XRAY_{img_id}.jpg")
     
@@ -283,14 +320,12 @@ if mode == "🔍 Phân Tích & In Phiếu":
                     img_out, findings, danger, img_id, pil_img = process_and_save(uploaded_file)
                     
                     if img_out is not None:
-                        # Tab hiển thị: Ảnh và Phiếu
                         t1, t2 = st.tabs(["🖼️ Hình ảnh AI", "📄 Phiếu Kết Quả (A4)"])
                         
                         with t1:
                             st.image(img_out, caption=f"ID: {img_id}", use_container_width=True)
                         
                         with t2:
-                            # Hỏi Gemini để bổ sung vào phiếu
                             gemini_txt = ""
                             if api_key:
                                 res = ask_gemini(api_key, pil_img)
@@ -298,7 +333,7 @@ if mode == "🔍 Phân Tích & In Phiếu":
                                 if gemini_txt:
                                     save_log({"id": img_id, "ai_reasoning": gemini_txt})
 
-                            # IN PHIẾU A4 XỊN XÒ
+                            # RENDER A4
                             report_html = generate_html_report(findings, danger, "Nguyễn Văn A (Demo)", img_id, gemini_txt)
                             st.markdown(report_html, unsafe_allow_html=True)
                             
@@ -307,23 +342,88 @@ if mode == "🔍 Phân Tích & In Phiếu":
                         st.error("Lỗi xử lý ảnh")
 
 elif mode == "📂 Hội Chẩn (Cloud)":
-    st.title("📂 DATA LABELING")
+    st.title("📂 HỘI CHẨN & HỒ SƠ BỆNH ÁN")
     df = get_logs()
+    
     if not df.empty:
         df = df.fillna("")
-        selected_id = st.selectbox("Chọn Ca bệnh:", df['id'].unique())
+        id_list = df['id'].unique()
+        selected_id = st.selectbox("👉 Chọn Mã Hồ Sơ:", id_list)
+        
         if selected_id:
             record = df[df["id"] == selected_id].iloc[0]
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                if record.get('image_url'): st.image(record['image_url'], use_container_width=True)
-            with c2:
-                st.info(f"BN: {record.get('patient_info')}")
-                st.markdown(f"**YOLO:** {record.get('result')}")
-                st.markdown(f"**Gemini:** {record.get('ai_reasoning')}")
-                # Form nhập liệu giữ nguyên...
-                st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "")
-                if st.button("Lưu thay đổi"): st.success("Đã lưu (Demo)")
+            
+            # --- CHIA 2 TAB: 1 LÀM VIỆC, 1 XEM HỒ SƠ A4 ---
+            tab_work, tab_report = st.tabs(["👨‍⚕️ Bàn Làm Việc", "📄 Hồ Sơ Bệnh Án (A4)"])
+            
+            # === TAB 1: NHẬP LIỆU & AI ===
+            with tab_work:
+                c1, c2 = st.columns([1, 1])
+                with c1:
+                    if record.get('image_url'):
+                        st.image(record['image_url'], caption="Ảnh X-quang đã lưu", use_container_width=True)
+                        # Load ảnh để hỏi lại Gemini nếu cần
+                        try:
+                            import requests
+                            from io import BytesIO
+                            response = requests.get(record['image_url'])
+                            pil_img = Image.open(BytesIO(response.content))
+                        except: pil_img = None
+                
+                with c2:
+                    st.markdown('<div class="workstation-box">', unsafe_allow_html=True)
+                    st.info(f"**Bệnh nhân:** {record.get('patient_info')}")
+                    st.success(f"**Kết quả YOLO:** {record.get('result')}")
+                    
+                    if record.get('ai_reasoning'):
+                        with st.expander("🤖 Đọc kết quả Gemini cũ"):
+                            st.write(record.get('ai_reasoning'))
+                    
+                    st.markdown("---")
+                    st.markdown("#### 📝 Nhập liệu lâm sàng")
+                    ctx = st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "")
+                    note = st.text_area("Ý kiến chuyên gia:", value=record.get("expert_note") or "")
+                    guide = st.text_area("Hướng dẫn AI (Prompt):", value=record.get("prompt_guidance") or "")
+                    
+                    tags_str = record.get("technical_tags") or ""
+                    def_tags = [t.strip() for t in tags_str.split(";")] if tags_str else []
+                    tags = st.multiselect("Đánh giá Kỹ thuật:", TECHNICAL_OPTS, default=def_tags)
+                    
+                    c_btn1, c_btn2 = st.columns(2)
+                    with c_btn1:
+                        if st.button("💾 Cập nhật Dữ liệu"):
+                            save_log({
+                                "id": selected_id, "clinical_context": ctx, 
+                                "expert_note": note, "prompt_guidance": guide, 
+                                "technical_tags": "; ".join(tags)
+                            })
+                            st.toast("Đã lưu!")
+                            
+                    with c_btn2:
+                        if api_key and pil_img and st.button("🧠 Hỏi lại Gemini"):
+                            with st.spinner("Gemini đang đọc lại..."):
+                                res = ask_gemini(api_key, pil_img, ctx, note, guide, tags)
+                                txt = res.get("reasoning", "")
+                                if txt:
+                                    save_log({"id": selected_id, "ai_reasoning": txt})
+                                    st.success("Đã cập nhật ý kiến Gemini mới!")
+                                    st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+            # === TAB 2: XEM LẠI PHIẾU A4 ===
+            with tab_report:
+                # Lấy dữ liệu từ record để tái tạo phiếu
+                raw_findings = record.get("details", "")
+                is_danger = record.get("result") == "BẤT THƯỜNG"
+                p_info = record.get("patient_info", "N/A")
+                gemini_old = record.get("ai_reasoning", "")
+                
+                # Gọi hàm tạo HTML
+                html_repro = generate_html_report(raw_findings, is_danger, p_info, selected_id, gemini_old)
+                st.markdown(html_repro, unsafe_allow_html=True)
+
+    else:
+        st.info("Chưa có dữ liệu nào trên Cloud.")
 
 elif mode == "🛠️ Xuất Dataset":
     st.title("🛠️ DATASET")
