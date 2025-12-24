@@ -17,7 +17,7 @@ import requests
 from io import BytesIO
 
 # ================= 1. CẤU HÌNH & CSS =================
-st.set_page_config(page_title="AI Hospital (V31.3 - Vietnamese)", page_icon="🇻🇳", layout="wide")
+st.set_page_config(page_title="AI Hospital (V32.1 - Auto Smart)", page_icon="🇻🇳", layout="wide")
 
 st.markdown("""
 <style>
@@ -35,12 +35,13 @@ st.markdown("""
     .stButton>button { width: 100%; font-weight: bold; height: 45px; }
     .step-badge { background-color: #002f6c; color: white; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; display: inline-block; margin-bottom: 10px; }
     
-    /* Highlight cho Radio Button */
     div[role="radiogroup"] > label > div:first-child { background-color: #e3f2fd; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- TỪ ĐIỂN VIỆT HÓA ---
+# --- TỪ ĐIỂN & BIẾN TOÀN CỤC (Đã fix lỗi NameError) ---
+ALLOWED_LABELS = ["Normal", "Cardiomegaly", "Pneumonia", "Effusion", "Pneumothorax", "Nodule_Mass", "Fibrosis_TB", "Fracture", "Pleural_Thickening", "Other"]
+
 LABEL_MAP = {
     "Normal": "Bình thường",
     "Cardiomegaly": "Bóng tim to (Cardiomegaly)",
@@ -53,26 +54,14 @@ LABEL_MAP = {
     "Pleural_Thickening": "Dày dính màng phổi",
     "Other": "Khác (Other)"
 }
-# Tạo list hiển thị cho Multiselect
 VN_LABELS_LIST = list(LABEL_MAP.values())
 
 TECHNICAL_OPTS = [
-    "✅ Phim đạt chuẩn", 
-    "⚠️ Chụp tại giường (AP View)", 
-    "⚠️ Hít vào không đủ sâu", 
-    "⚠️ Bệnh nhân xoay lệch", 
-    "⚠️ Tia quá cứng (Phim đen)", 
-    "⚠️ Tia quá mềm (Phim trắng)", 
-    "⚠️ Dị vật/Áo chưa bỏ"
+    "✅ Phim đạt chuẩn", "⚠️ Chụp tại giường (AP View)", "⚠️ Hít vào không đủ sâu", 
+    "⚠️ Bệnh nhân xoay lệch", "⚠️ Tia quá cứng (Phim đen)", "⚠️ Tia quá mềm (Phim trắng)", "⚠️ Dị vật/Áo chưa bỏ"
 ]
 
-FEEDBACK_OPTS = [
-    "Chưa đánh giá",
-    "✅ Đồng thuận (AI Đúng)",
-    "⚠️ Dương tính giả (AI Báo thừa)",
-    "⚠️ Âm tính giả (AI Bỏ sót)",
-    "❌ Sai hoàn toàn"
-]
+FEEDBACK_OPTS = ["Chưa đánh giá", "✅ Đồng thuận (AI Đúng)", "⚠️ Dương tính giả (AI Báo thừa)", "⚠️ Âm tính giả (AI Bỏ sót)", "❌ Sai hoàn toàn"]
 
 # --- KẾT NỐI SUPABASE ---
 @st.cache_resource
@@ -141,68 +130,39 @@ def get_logs():
         return pd.DataFrame(response.data)
     except: return pd.DataFrame()
 
-# --- GEMINI ---
-# --- GEMINI (V32.0 - AUTO SMART SELECT) ---
+# --- GEMINI (AUTO SMART SELECT V32.0) ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     if not api_key: return {}
-    
-    # Cấu hình API
     try: genai.configure(api_key=api_key)
     except: return {"labels": [], "reasoning": "Sai API Key"}
 
-    # --- DANH SÁCH MỤC TIÊU (Ưu tiên từ Xịn -> Nhanh) ---
-    # Google hiện tại chưa có 2.5 hay 3.5, mới nhất là 2.0 Flash Exp
-    model_priority = [
-        "gemini-2.0-flash-exp",  # Mới nhất, xịn nhất (Thử trước)
-        "gemini-1.5-pro",        # Phân tích sâu (Thử nhì)
-        "gemini-1.5-flash"       # Nhanh, ổn định (Chống trượt)
-    ]
+    # DANH SÁCH MỤC TIÊU (Ưu tiên từ Xịn -> Nhanh)
+    model_priority = ["gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"]
 
-    labels_str = ", ".join(ALLOWED_LABELS) # Danh sách bệnh tiếng Anh (để AI dễ hiểu)
+    labels_str = ", ".join(ALLOWED_LABELS) # Dùng list tiếng Anh để AI hiểu chuẩn
     tech_note = ", ".join(tags) if tags else "Chuẩn."
     
-    # Prompt tối ưu hóa
     prompt = f"""
     Role: Senior Radiologist.
-    INPUTS: 
-    - Clinical Context: "{context}"
-    - Expert Note: "{note}"
-    - Technical QA: "{tech_note}"
-    - Guidance: "{guide}"
-    
-    TASK: Analyze Chest X-ray image. 
-    1. Check technical quality.
-    2. Detect abnormalities from this list: [{labels_str}]. If none, return 'Normal'.
-    3. Provide reasoning in Vietnamese (Tiếng Việt).
-    
-    OUTPUT JSON FORMAT: {{ "labels": ["..."], "reasoning": "..." }}
+    INPUTS: Context="{context}", ExpertNote="{note}", Guidance="{guide}", TechQA="{tech_note}".
+    TASK: Analyze Chest X-ray. Select labels from: [{labels_str}].
+    OUTPUT JSON: {{ "labels": ["..."], "reasoning": "..." }} (Reasoning in Vietnamese)
     """
 
-    # --- VÒNG LẶP AUTO SCAN ---
     last_error = ""
     for model_name in model_priority:
         try:
-            # Tạo model
             model = genai.GenerativeModel(model_name)
-            
-            # Gửi ảnh và prompt
-            response = model.generate_content(
-                [prompt, image], 
-                generation_config={"response_mime_type": "application/json"}
-            )
-            
-            # Nếu chạy thành công đến đây thì trả về kết quả ngay
+            response = model.generate_content([prompt, image], generation_config={"response_mime_type": "application/json"})
             result = json.loads(response.text)
-            result["used_model"] = model_name # Ghi dấu lại xem nó dùng model nào
+            result["used_model"] = model_name
             return result
-            
         except Exception as e:
-            # Nếu lỗi, bỏ qua, thử model tiếp theo trong danh sách
             last_error = str(e)
             continue 
 
-    # Nếu thử hết cả 3 model mà vẫn lỗi
-    return {"labels": [], "reasoning": f"Hệ thống bận hoặc lỗi API (Chi tiết: {last_error})", "used_model": "Failed"}
+    return {"labels": [], "reasoning": f"Lỗi hệ thống Gemini: {last_error}", "used_model": "Failed"}
+
 # --- HTML REPORT ---
 def generate_html_report(findings_input, has_danger, patient_info, img_id, gemini_text=""):
     current_time = datetime.now().strftime('%H:%M ngày %d/%m/%Y')
@@ -318,14 +278,7 @@ def process_and_save(image_file):
     img_url = upload_image(display_img, f"XRAY_{img_id}.jpg")
     
     if img_url:
-        save_log({
-            "id": img_id, 
-            "created_at": datetime.now().isoformat(), 
-            "image_url": img_url, 
-            "result": "BẤT THƯỜNG" if has_danger else "BÌNH THƯỜNG", 
-            "details": str(findings_db), 
-            "patient_info": patient_info
-        })
+        save_log({"id": img_id, "created_at": datetime.now().isoformat(), "image_url": img_url, "result": "BẤT THƯỜNG" if has_danger else "BÌNH THƯỜNG", "details": str(findings_db), "patient_info": patient_info})
 
     return display_img, findings_db, has_danger, img_id, Image.fromarray(img_resized)
 
@@ -354,7 +307,9 @@ if mode == "🔍 Phân Tích & In Phiếu":
                             if api_key:
                                 res = ask_gemini(api_key, pil_img)
                                 gemini_txt = res.get("reasoning", "")
+                                used_model = res.get("used_model", "")
                                 if gemini_txt and supabase: save_log({"id": img_id, "ai_reasoning": gemini_txt})
+                                if used_model: st.toast(f"Đã dùng: {used_model}")
                             html = generate_html_report(findings, danger, "Nguyễn Văn A", img_id, gemini_txt)
                             st.markdown(html, unsafe_allow_html=True)
                         if supabase: st.success("✅ Đã lưu vào Cloud!")
@@ -405,16 +360,17 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         tags = st.multiselect("Đánh giá Kỹ thuật:", TECHNICAL_OPTS, default=def_tags)
                         
                         # --- NÚT HỎI GEMINI (ĐÃ FIX) ---
-                        if st.button("🧠 Hỏi lại Gemini"):
+                        if st.button("🧠 Hỏi lại Gemini (Auto Model)"):
                             if not api_key: st.error("⚠️ Thiếu API Key!")
                             elif not pil_img: st.error("⚠️ Không tải được ảnh từ Cloud!")
                             else:
-                                with st.spinner("Gemini đang đọc lại..."):
+                                with st.spinner("Đang chạy Gemini 2.0 (hoặc 1.5)..."):
                                     res = ask_gemini(api_key, pil_img, ctx, note, guide, tags)
                                     txt = res.get("reasoning", "")
+                                    model_used = res.get("used_model", "")
                                     if txt:
                                         save_log({"id": selected_id, "ai_reasoning": txt})
-                                        st.success("Đã cập nhật Gemini mới!")
+                                        st.success(f"Đã cập nhật! (Model dùng: {model_used})")
                                         time.sleep(1)
                                         st.rerun()
 
@@ -427,12 +383,10 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         if fb1 == "Chưa đánh giá":
                             st.markdown('<div class="step-badge">VÒNG 1: SƠ BỘ</div>', unsafe_allow_html=True)
                             
-                            # RADIO BUTTON CÓ DƯƠNG TÍNH GIẢ/ÂM TÍNH GIẢ
                             new_fb = st.radio("Đánh giá AI:", FEEDBACK_OPTS, index=0)
                             
                             lbl_str = record.get("label_1") or ""
                             def_lbls = [l.strip() for l in lbl_str.split(";")] if lbl_str else []
-                            # MULTISELECT CÓ TIẾNG VIỆT
                             new_lbls = st.multiselect("Chốt bệnh lý:", VN_LABELS_LIST, default=def_lbls)
                             
                             saved_rating = record.get("prompt_rating", "Khá")
