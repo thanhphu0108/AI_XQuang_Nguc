@@ -26,88 +26,66 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
     st.rerun()
 
-# ================= 1. CẤU HÌNH & CSS "KHOA HỌC" =================
-st.set_page_config(page_title="AI Hospital (V33.4 - Pro)", page_icon="🏥", layout="wide")
+# ================= 1. CẤU HÌNH & CSS =================
+st.set_page_config(page_title="AI Hospital (V33.6 - Speed Label)", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
-    .main { background-color: #f0f2f6; }
+    .main { background-color: #f4f6f9; }
     
-    /* CARD STYLE (Giao diện khoa học) */
+    /* KHUNG KẾT QUẢ GEMINI */
+    .gemini-report-box {
+        background-color: #e3f2fd;
+        border: 1px solid #90caf9;
+        border-radius: 8px;
+        padding: 15px;
+        margin-top: 15px;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        color: #0d47a1;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+    .gemini-report-box h4 { margin-top: 0; color: #1565c0; font-weight: bold; font-size: 14px; border-bottom: 1px solid #bbdefb; padding-bottom: 5px; }
+    
+    /* CARD STYLE */
     .sci-card {
         background-color: white;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        margin-bottom: 20px;
-        border-top: 3px solid #002f6c;
-    }
-    
-    .sci-header {
-        font-size: 16px;
-        font-weight: bold;
-        color: #002f6c;
-        margin-bottom: 15px;
-        text-transform: uppercase;
-        border-bottom: 1px solid #eee;
-        padding-bottom: 5px;
-    }
-
-    /* CHAT HISTORY STYLE (Đẹp) */
-    .chat-box {
-        border: 1px solid #e0e0e0;
+        padding: 15px;
         border-radius: 8px;
-        margin-bottom: 10px;
-        background: white;
-        overflow: hidden;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        margin-bottom: 15px;
+        border-left: 4px solid #002f6c;
     }
-    .chat-meta {
-        background-color: #f8f9fa;
-        padding: 8px 12px;
-        font-size: 11px;
-        color: #666;
-        border-bottom: 1px solid #eee;
-        display: flex; justify-content: space-between;
-    }
-    .chat-prompt {
-        padding: 10px;
-        font-family: 'Consolas', monospace;
-        font-size: 12px;
-        color: #444;
-        background-color: #fffde7;
-        border-bottom: 1px dashed #eee;
-    }
-    .chat-response {
-        padding: 12px;
-        font-size: 14px;
-        color: #000;
-        line-height: 1.5;
-        background-color: #fff;
+    .sci-header {
+        font-size: 14px; font-weight: bold; color: #555; text-transform: uppercase;
+        margin-bottom: 10px; border-bottom: 1px dashed #eee; padding-bottom: 5px;
     }
     
-    /* BADGE */
-    .badge-ai { background:#e3f2fd; color:#1565c0; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:10px; }
+    /* LABELING ZONE - Highlight */
+    .labeling-zone {
+        border-left: 4px solid #ff9800 !important;
+        background-color: #fff8e1 !important;
+    }
+    
     .stButton>button { width: 100%; font-weight: bold; }
+    .model-badge { background:#2e7d32; color:white; padding:2px 8px; border-radius:10px; font-size:11px; }
+    
+    /* Chat history compact */
+    .chat-box { border: 1px solid #eee; border-radius: 5px; margin-bottom: 8px; background: white; font-size: 12px; }
+    .chat-meta { background: #f9f9f9; padding: 4px 8px; color: #888; font-size: 10px; display: flex; justify-content: space-between; }
+    .chat-content { padding: 8px; color: #333; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- TỪ ĐIỂN NHÃN BỆNH (Map cho YOLO Export) ---
-# Format: "Tên hiển thị": ID_YOLO
+# --- TỪ ĐIỂN ---
 LABEL_MAPPING = {
-    "Phổi / Bình thường (Normal)": 0,
-    "Tim / Bóng tim to (Cardiomegaly)": 1,
-    "Phổi / Viêm phổi (Pneumonia)": 2,
-    "Màng phổi / Tràn dịch (Effusion)": 3,
-    "Màng phổi / Tràn khí (Pneumothorax)": 4,
-    "Phổi / Nốt - Khối mờ (Nodule/Mass)": 5,
-    "Phổi / Xơ hóa - Lao (Fibrosis/TB)": 6,
-    "Xương / Gãy xương (Fracture)": 7,
-    "Màng phổi / Dày dính (Pleural Thickening)": 8,
+    "Phổi / Bình thường (Normal)": 0, "Tim / Bóng tim to (Cardiomegaly)": 1, "Phổi / Viêm phổi (Pneumonia)": 2,
+    "Màng phổi / Tràn dịch (Effusion)": 3, "Màng phổi / Tràn khí (Pneumothorax)": 4, "Phổi / Nốt - Khối mờ (Nodule/Mass)": 5,
+    "Phổi / Xơ hóa - Lao (Fibrosis/TB)": 6, "Xương / Gãy xương (Fracture)": 7, "Màng phổi / Dày dính (Pleural Thickening)": 8,
     "Khác / Bệnh lý khác (Other)": 9
 }
 STRUCTURED_LABELS = list(LABEL_MAPPING.keys())
-
-TECHNICAL_OPTS = ["✅ Phim đạt chuẩn", "⚠️ Chụp tại giường", "⚠️ Hít vào nông", "⚠️ Bệnh nhân xoay", "⚠️ Tia cứng/mềm", "⚠️ Dị vật/Áo"]
+TECHNICAL_OPTS = ["✅ Phim đạt chuẩn kỹ thuật", "⚠️ Chụp tại giường (AP)", "⚠️ Hít vào không đủ sâu", "⚠️ Bệnh nhân xoay lệch", "⚠️ Tia cứng/mềm", "⚠️ Dị vật/Áo"]
 FEEDBACK_OPTS = ["Chưa đánh giá", "✅ Đồng thuận", "⚠️ Dương tính giả", "⚠️ Âm tính giả", "❌ Sai hoàn toàn"]
 RATING_OPTS = ["Tệ", "TB", "Khá", "Tốt", "Xuất sắc"]
 
@@ -125,9 +103,8 @@ MODELS_DIR = os.path.join(BASE_PATH, "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 DOCTOR_ROSTER = {
-    "ANATOMY": "Dr_Anatomy.pt", "PNEUMOTHORAX": "Dr_Pneumothorax.pt", 
-    "PNEUMONIA": "Dr_Pneumonia.pt", "TUMOR": "Dr_Tumor.pt",        
-    "EFFUSION": "Dr_Effusion.pt", "OPACITY": "Dr_Opacity.pt", "HEART": "Dr_Heart.pt"         
+    "ANATOMY": "Dr_Anatomy.pt", "PNEUMOTHORAX": "Dr_Pneumothorax.pt", "PNEUMONIA": "Dr_Pneumonia.pt", 
+    "TUMOR": "Dr_Tumor.pt", "EFFUSION": "Dr_Effusion.pt", "OPACITY": "Dr_Opacity.pt", "HEART": "Dr_Heart.pt"         
 }
 
 @st.cache_resource
@@ -142,11 +119,9 @@ def load_models():
 
 MODELS = load_models()
 
-# --- HELPER FUNCTIONS ---
+# --- UTILS ---
 def check_password(password):
-    # Hash của "Admin@123ptp"
-    correct_hash = "25e4d273760a373b976d9102372d627c" # MD5
-    return hashlib.md5(password.encode()).hexdigest() == correct_hash
+    return hashlib.md5(password.encode()).hexdigest() == "25e4d273760a373b976d9102372d627c"
 
 def upload_image(img_cv, filename):
     if not supabase: return None
@@ -173,7 +148,7 @@ def get_logs():
         return pd.DataFrame(response.data)
     except: return pd.DataFrame()
 
-# --- GEMINI (V33.4 - Auto Retry & Prompt) ---
+# --- GEMINI ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     if not api_key: return {"labels": [], "reasoning": "Thiếu API Key", "prompt": ""}
     
@@ -182,21 +157,30 @@ def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
         model_priority = ["gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"]
         
         labels_str = ", ".join(STRUCTURED_LABELS) 
-        tech_note = ", ".join(tags) if tags else "Chuẩn."
+        tech_note = ", ".join(tags) if tags else "Phim đạt chuẩn kỹ thuật."
         
         prompt = f"""
-        Role: Senior Radiologist.
-        INPUTS: 
-        - Clinical Context: "{context}"
-        - Expert Note: "{note}"
-        - Technical QA: "{tech_note}"
-        - Guidance: "{guide}"
-        
-        TASK: Analyze Chest X-ray. 
-        Select closest labels from this list: {labels_str}.
-        Provide reasoning in Vietnamese.
-        
-        OUTPUT JSON: {{ "labels": ["..."], "reasoning": "..." }}
+Vai trò: Bác sĩ chẩn đoán hình ảnh chuyên sâu (Senior Radiologist).
+
+==== 1. DỮ LIỆU ĐẦU VÀO ====
+- BỆNH CẢNH (Context): "{context}"
+- GHI CHÚ CHUYÊN GIA (Expert Note): "{note}"
+- HƯỚNG DẪN CỤ THỂ (Guidance): "{guide}"
+
+==== 2. ĐIỀU KIỆN KỸ THUẬT (QA/QC) QUAN TRỌNG ====
+- Trạng thái phim: {tech_note}
+(Lưu ý: Hãy cân nhắc các yếu tố kỹ thuật trên để tránh Dương tính giả/Âm tính giả. Ví dụ: Nếu hít không sâu, đừng đọc vội là tim to hay rốn phổi đậm trừ khi quá rõ ràng).
+
+==== 3. NHIỆM VỤ ====
+- Phân tích hình ảnh X-quang đính kèm.
+- Chọn nhãn bệnh lý chính xác từ danh sách: [{labels_str}].
+- Nếu bình thường, chọn 'Bình thường (Normal)'.
+
+OUTPUT JSON FORMAT:
+{{
+  "labels": ["Label1", "Label2"],
+  "reasoning": "VIẾT THEO CẤU TRÚC SAU (BẮT BUỘC):\\nKỹ thuật: ...\\nMô tả:\\n- Bóng tim: ...\\n- Nhu mô phổi: ...\\n- Màng phổi: ...\\n- Xương và phần mềm: ...\\nBiện luận: ... (Kết hợp hình ảnh và lâm sàng)\\nKết luận: (Gạch đầu dòng các bệnh lý)"
+}}
         """
         
         last_error = ""
@@ -209,13 +193,8 @@ def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
                 result["sent_prompt"] = prompt
                 return result
             except Exception as e:
-                err_msg = str(e)
-                if "429" in err_msg:
-                    time.sleep(1)
-                    continue
-                else:
-                    last_error = err_msg
-                    continue
+                if "429" in str(e): time.sleep(1); continue
+                else: last_error = str(e); continue
 
         return {"labels": [], "reasoning": f"Lỗi: {last_error}", "sent_prompt": prompt}
 
@@ -294,7 +273,6 @@ with st.sidebar:
     api_key = st.text_input("🔑 Gemini API Key:", value=st.secrets.get("GEMINI_API_KEY", ""), type="password")
     mode = st.radio("Menu:", ["🔍 Phân Tích & In Phiếu", "📂 Hội Chẩn (Cloud)", "🛠️ Xuất Dataset (Admin)"])
 
-# ... (Tab 1: Phân Tích giữ nguyên như cũ cho gọn code) ...
 if mode == "🔍 Phân Tích & In Phiếu":
     st.title("🏥 TRỢ LÝ CHẨN ĐOÁN (A4)")
     uploaded_file = st.file_uploader("Chọn ảnh X-quang:", type=["jpg", "png", "jpeg", "dcm"])
@@ -306,7 +284,7 @@ if mode == "🔍 Phân Tích & In Phiếu":
                 st.success("Đã phân tích xong và lưu vào Cloud.")
             else: st.error("Lỗi.")
 
-# ... (TAB 2: HỘI CHẨN - GIAO DIỆN KHOA HỌC) ...
+# ... (TAB 2: HỘI CHẨN - SPEED MODE) ...
 elif mode == "📂 Hội Chẩn (Cloud)":
     st.title("📂 HỘI CHẨN CHUYÊN GIA")
     
@@ -316,219 +294,170 @@ elif mode == "📂 Hội Chẩn (Cloud)":
         if not df.empty:
             df = df.fillna("")
             id_list = df['id'].tolist()
-            
-            # Layout chọn ID
-            selected_id = st.selectbox("👉 Chọn Mã Hồ Sơ Bệnh Án:", id_list)
+            selected_id = st.selectbox("👉 Chọn Mã Hồ Sơ:", id_list)
             
             if selected_id:
                 record = df[df["id"] == selected_id].iloc[0]
                 
-                # Load ảnh
+                # --- PREPARE DATA ---
                 pil_img = None
                 if record.get('image_url'):
                     try: pil_img = Image.open(BytesIO(requests.get(record['image_url'], timeout=5).content))
                     except: pass
                 
-                # --- CHIA 2 CỘT: TRÁI (ẢNH + KẾT QUẢ) - PHẢI (BÀN LÀM VIỆC) ---
+                # Lấy History sớm để dùng cho Auto-Select Label ở cột trái
+                hist_data = record.get('ai_reasoning', [])
+                if isinstance(hist_data, str):
+                    try: hist_data = json.loads(hist_data)
+                    except: hist_data = [] 
+                
+                # --- LAYOUT CỘT: TRÁI (ẢNH + GÁN NHÃN) | PHẢI (INPUT + CHAT) ---
                 col_left, col_right = st.columns([1.2, 1])
                 
+                # === CỘT TRÁI: ẢNH & GÁN NHÃN ===
                 with col_left:
+                    # 1. ẢNH
                     st.markdown('<div class="sci-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="sci-header">🖼️ HÌNH ẢNH & KẾT QUẢ MÁY</div>', unsafe_allow_html=True)
                     if record.get('image_url'):
                         st.image(record['image_url'], use_container_width=True)
-                    
-                    st.info(f"**Bệnh nhân:** {record.get('patient_info')}")
-                    
+                    # Ẩn tên bệnh nhân theo yêu cầu
                     res_yolo = record.get('result')
                     color = "red" if res_yolo == "BẤT THƯỜNG" else "green"
-                    st.markdown(f"**Sàng lọc YOLO:** <span style='color:{color}; font-weight:bold'>{res_yolo}</span>", unsafe_allow_html=True)
+                    st.caption(f"Sàng lọc sơ bộ (YOLO): {res_yolo}")
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                with col_right:
-                    # --- CARD 1: LÂM SÀNG ---
-                    st.markdown('<div class="sci-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="sci-header">📝 DỮ LIỆU LÂM SÀNG</div>', unsafe_allow_html=True)
-                    ctx = st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "", height=100)
-                    note = st.text_area("Ý kiến chuyên gia:", value=record.get("expert_note") or "", height=70)
-                    guide = st.text_area("Prompt Guide:", value=record.get("prompt_guidance") or "", height=70)
-                    tags = st.multiselect("Kỹ thuật:", TECHNICAL_OPTS, default=[t.strip() for t in (record.get("technical_tags") or "").split(";") if t])
+                    # 2. KHUNG GÁN NHÃN (ĐƯA QUA TRÁI CHO NHANH)
+                    st.markdown('<div class="sci-card labeling-zone">', unsafe_allow_html=True)
+                    st.markdown('<div class="sci-header">🏷️ GÁN NHÃN NHANH (FAST LABEL)</div>', unsafe_allow_html=True)
                     
-                    # --- NÚT GEMINI ---
-                    if st.button("🧠 HỎI GEMINI (Lưu Nhật Ký)"):
-                        if not api_key: st.error("Thiếu API Key")
-                        else:
-                            with st.spinner("Gemini đang suy nghĩ..."):
-                                res = ask_gemini(api_key, pil_img, ctx, note, guide, tags)
-                                txt = res.get("reasoning", "")
-                                if txt:
-                                    # Update JSON Log
-                                    hist = record.get('ai_reasoning', [])
-                                    if isinstance(hist, str): 
-                                        try: hist = json.loads(hist)
-                                        except: hist = []
-                                    
-                                    new_entry = {
-                                        "time": datetime.now().strftime("%H:%M %d/%m"),
-                                        "prompt": res.get("sent_prompt", ""),
-                                        "response": txt,
-                                        "model": res.get("used_model", "AI")
-                                    }
-                                    hist.insert(0, new_entry)
-                                    save_log({"id": selected_id, "ai_reasoning": json.dumps(hist)})
-                                    st.success("Đã cập nhật!")
-                                    time.sleep(0.5); st.rerun()
-                                else: st.error(f"Lỗi: {res}")
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                    # --- CARD 2: NHẬT KÝ CHAT (ĐẸP) ---
-                    st.markdown('<div class="sci-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="sci-header">💬 NHẬT KÝ HỘI CHẨN</div>', unsafe_allow_html=True)
-                    
-                    hist_data = record.get('ai_reasoning', [])
-                    if isinstance(hist_data, str):
-                        try: hist_data = json.loads(hist_data)
-                        except: hist_data = [] # Handle old format
-                    
-                    if not hist_data:
-                        st.caption("Chưa có dữ liệu.")
-                    else:
-                        for item in hist_data:
-                            with st.container():
-                                st.markdown(f"""
-                                <div class="chat-box">
-                                    <div class="chat-meta">
-                                        <span>⏰ {item.get('time','')}</span>
-                                        <span class="badge-ai">{item.get('model','Gemini')}</span>
-                                    </div>
-                                    <div class="chat-prompt">❓ {item.get('prompt','')}</div>
-                                    <div class="chat-response">🤖 {item.get('response','')}</div>
-                                </div>
-                                """, unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                    # --- CARD 3: GÁN NHÃN (QUAN TRỌNG) ---
-                    st.markdown('<div class="sci-card" style="border-top-color: #ff9800;">', unsafe_allow_html=True)
-                    st.markdown('<div class="sci-header">🏷️ KẾT LUẬN & GÁN NHÃN</div>', unsafe_allow_html=True)
-                    
-                    # LOGIC AUTO-SELECT THÔNG MINH
+                    # Logic Auto-Select
                     saved_lbls = [l.strip() for l in (record.get("label_1") or "").split(";") if l]
-                    
-                    # Nếu chưa có nhãn lưu, thử tìm trong kết quả Gemini mới nhất để gợi ý
                     if not saved_lbls and hist_data:
                         last_resp = hist_data[0].get("response", "")
                         for sl in STRUCTURED_LABELS:
-                            # Tìm tên bệnh trong text (đơn giản)
-                            clean_name = sl.split("(")[0].split("/")[-1].strip() # Lấy "Viêm phổi"
-                            if clean_name.lower() in last_resp.lower():
-                                saved_lbls.append(sl)
+                            clean_name = sl.split("(")[0].split("/")[-1].strip()
+                            if clean_name.lower() in last_resp.lower(): saved_lbls.append(sl)
                     
-                    # Lọc chỉ lấy những nhãn hợp lệ trong list mới
                     valid_defaults = [l for l in saved_lbls if l in STRUCTURED_LABELS]
-
+                    
+                    # Controls
                     new_fb = st.radio("Đánh giá AI:", FEEDBACK_OPTS, index=0, horizontal=True)
                     new_lbls = st.multiselect("Chốt bệnh (Auto-Fill):", STRUCTURED_LABELS, default=valid_defaults)
                     
                     safe_rating = record.get("prompt_rating") if record.get("prompt_rating") in RATING_OPTS else "Khá"
                     rating = st.select_slider("Chất lượng Prompt:", options=RATING_OPTS, value=safe_rating)
                     
-                    if st.button("💾 LƯU KẾT QUẢ"):
+                    if st.button("💾 LƯU KẾT QUẢ GÁN NHÃN", type="primary"):
+                        # Biến ctx, note, guide, tags lấy từ cột phải (nhưng chưa render).
+                        # Streamlit rerun sẽ lấy giá trị mới nhất.
+                        # Lưu ý: Cần lấy giá trị hiện tại của các widget bên phải (chưa vẽ).
+                        # Cách fix: Lưu riêng phần gán nhãn, không ghi đè context nếu không thay đổi
                         save_log({
                             "id": selected_id, 
-                            "clinical_context": ctx, "expert_note": note, "prompt_guidance": guide, 
-                            "technical_tags": "; ".join(tags), 
                             "feedback_1": new_fb, "label_1": "; ".join(new_lbls), 
                             "prompt_rating": rating
                         })
-                        st.success("Đã lưu hồ sơ!")
+                        st.success("✅ Đã lưu nhãn!")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                    # 3. KẾT QUẢ GEMINI (THAM KHẢO)
+                    if hist_data:
+                        last_item = hist_data[0]
+                        model_name = last_item.get('model', 'Gemini')
+                        resp_text = last_item.get('response', '').replace("\n", "<br>")
+                        st.markdown(f"""
+                        <div class="gemini-report-box">
+                            <h4>🤖 AI Phân tích ({model_name})</h4>
+                            {resp_text}
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                # === CỘT PHẢI: LÂM SÀNG & CHAT ===
+                with col_right:
+                    # 1. NHẬP LIỆU
+                    st.markdown('<div class="sci-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="sci-header">📝 DỮ LIỆU LÂM SÀNG & PROMPT</div>', unsafe_allow_html=True)
+                    
+                    ctx = st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "", height=100)
+                    note = st.text_area("Ghi chú Chuyên gia:", value=record.get("expert_note") or "", height=70)
+                    guide = st.text_area("Hướng dẫn Prompt:", value=record.get("prompt_guidance") or "", height=70)
+                    tags = st.multiselect("Kỹ thuật:", TECHNICAL_OPTS, default=[t.strip() for t in (record.get("technical_tags") or "").split(";") if t])
+                    
+                    # Nút lưu riêng cho lâm sàng (để tránh conflict)
+                    if st.button("Lưu thông tin lâm sàng"):
+                        save_log({"id": selected_id, "clinical_context": ctx, "expert_note": note, "prompt_guidance": guide, "technical_tags": "; ".join(tags)})
+                        st.toast("Đã lưu thông tin!")
+
+                    st.markdown("---")
+                    if st.button("🧠 HỎI GEMINI (Lưu Nhật Ký)"):
+                        if not api_key: st.error("Thiếu API Key")
+                        else:
+                            with st.spinner("Gemini đang phân tích..."):
+                                res = ask_gemini(api_key, pil_img, ctx, note, guide, tags)
+                                txt = res.get("reasoning", "")
+                                if txt:
+                                    new_entry = {
+                                        "time": datetime.now().strftime("%H:%M %d/%m"),
+                                        "prompt": res.get("sent_prompt", ""),
+                                        "response": txt,
+                                        "model": res.get("used_model", "AI")
+                                    }
+                                    hist_data.insert(0, new_entry)
+                                    save_log({"id": selected_id, "ai_reasoning": json.dumps(hist_data)})
+                                    st.success("Đã cập nhật!")
+                                    time.sleep(0.5); st.rerun()
+                                else: st.error(f"Lỗi: {res}")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                    # 2. LỊCH SỬ CHAT
+                    st.markdown('<div class="sci-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="sci-header">💬 LỊCH SỬ HỘI CHẨN</div>', unsafe_allow_html=True)
+                    if not hist_data: st.caption("Chưa có dữ liệu.")
+                    else:
+                        for item in hist_data:
+                            with st.container():
+                                st.markdown(f"""
+                                <div class="chat-box">
+                                    <div class="chat-meta">
+                                        <span>⏰ {item.get('time','')} | {item.get('model','')}</span>
+                                    </div>
+                                    <div class="chat-content">
+                                        ❓ <i>{item.get('prompt','')}</i><br>
+                                        🤖 {item.get('response','')[:100]}... (Xem bên trái)
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
 
         else: st.warning("📭 Database trống.")
 
-# ... (TAB 3: XUẤT DATASET YOLO - BẢO MẬT & XỊN XÒ) ...
+# ... (TAB 3: XUẤT DATASET YOLO - GIỮ NGUYÊN) ...
 elif mode == "🛠️ Xuất Dataset (Admin)":
     st.title("🛠️ XUẤT DATASET YOLO (Admin Only)")
-    
     col_auth, col_empty = st.columns([1, 2])
-    with col_auth:
-        pwd = st.text_input("Nhập mật khẩu quản trị:", type="password")
-        
+    with col_auth: pwd = st.text_input("Nhập mật khẩu quản trị:", type="password")
     if pwd:
         if check_password(pwd):
-            st.success("✅ Đăng nhập thành công! (Hash Verified)")
-            
+            st.success("✅ Verified")
             df = get_logs()
             if not df.empty:
-                st.markdown("### 📊 Xem trước dữ liệu")
                 st.dataframe(df.head(5))
-                
-                # MÔ PHỎNG ẢNH
-                st.markdown("### 👁️ Mô phỏng ảnh xuất ra")
-                sample = df.iloc[0]
-                c1, c2 = st.columns([1, 2])
-                with c1:
-                    if sample.get('image_url'):
-                        st.image(sample['image_url'], caption="Ảnh gốc")
-                with c2:
-                    st.markdown(f"**Filename:** `image_{sample['id']}.jpg`")
-                    st.markdown(f"**YOLO Label (.txt):** `image_{sample['id']}.txt`")
-                    
-                    # Logic tạo nội dung file txt giả lập (Vì chưa có tọa độ thật)
-                    lbls = str(sample.get('label_1') or "")
-                    txt_preview = ""
-                    for l in lbls.split(";"):
-                        l = l.strip()
-                        if l in LABEL_MAPPING:
-                            class_id = LABEL_MAPPING[l]
-                            # Giả lập Box full ảnh (0.5 0.5 1.0 1.0) để người dùng tự sửa sau
-                            txt_preview += f"{class_id} 0.5000 0.5000 1.0000 1.0000\n"
-                    
-                    st.text_area("Nội dung file .txt (Mô phỏng):", value=txt_preview, height=100)
-                    st.warning("⚠️ Lưu ý: Tọa độ Box đang để mặc định (Full ảnh) vì Database chưa lưu tọa độ chi tiết.")
-
-                if st.button("📦 TẢI VỀ DATASET (ZIP)"):
-                    with st.spinner("Đang tải ảnh và tạo Dataset YOLO..."):
-                        # Tạo file Zip trong bộ nhớ
+                if st.button("📦 TẢI DATASET (ZIP)"):
+                    with st.spinner("Đang tạo..."):
                         zip_buffer = BytesIO()
                         with zipfile.ZipFile(zip_buffer, "w") as zf:
-                            # Tạo file classes.txt
-                            class_content = "\n".join([f"{k}" for k in LABEL_MAPPING.keys()])
-                            zf.writestr("classes.txt", class_content)
-                            
-                            progress_bar = st.progress(0)
-                            total = len(df)
-                            
+                            zf.writestr("classes.txt", "\n".join(LABEL_MAPPING.keys()))
+                            progress_bar = st.progress(0); total = len(df)
                             for idx, row in df.iterrows():
-                                img_url = row.get('image_url')
-                                img_id = row['id']
+                                img_url = row.get('image_url'); img_id = row['id']
                                 if img_url:
                                     try:
-                                        # Tải ảnh
-                                        img_data = requests.get(img_url, timeout=5).content
-                                        zf.writestr(f"images/image_{img_id}.jpg", img_data)
-                                        
-                                        # Tạo label txt
-                                        labels_str = str(row.get('label_1') or "")
-                                        label_content = ""
-                                        for l in labels_str.split(";"):
-                                            l = l.strip()
-                                            if l in LABEL_MAPPING:
-                                                cid = LABEL_MAPPING[l]
-                                                label_content += f"{cid} 0.5 0.5 1.0 1.0\n"
-                                        
-                                        zf.writestr(f"labels/image_{img_id}.txt", label_content)
+                                        zf.writestr(f"images/image_{img_id}.jpg", requests.get(img_url, timeout=5).content)
+                                        txt_cont = ""
+                                        for l in str(row.get('label_1') or "").split(";"):
+                                            if l.strip() in LABEL_MAPPING: txt_cont += f"{LABEL_MAPPING[l.strip()]} 0.5 0.5 1.0 1.0\n"
+                                        zf.writestr(f"labels/image_{img_id}.txt", txt_cont)
                                     except: pass
-                                
                                 progress_bar.progress((idx + 1) / total)
-                        
-                        st.download_button(
-                            label="📥 CLICK ĐỂ TẢI DATASET.ZIP",
-                            data=zip_buffer.getvalue(),
-                            file_name="yolo_dataset_xray.zip",
-                            mime="application/zip",
-                            type="primary"
-                        )
-            else:
-                st.info("Chưa có dữ liệu.")
-        else:
-            st.error("⛔ Mật khẩu sai!")
+                        st.download_button("📥 TẢI XUỐNG", zip_buffer.getvalue(), "dataset.zip", "application/zip")
+        else: st.error("Sai mật khẩu!")
