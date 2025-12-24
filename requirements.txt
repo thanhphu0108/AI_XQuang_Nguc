@@ -7,4 +7,4 @@ opencv-python-headless
 ultralytics
 pydicom
 google-generativeai
-openai
+supabase
