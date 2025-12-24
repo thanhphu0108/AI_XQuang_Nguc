@@ -17,7 +17,7 @@ import requests
 from io import BytesIO
 
 # ================= 1. CẤU HÌNH & CSS =================
-st.set_page_config(page_title="AI Hospital (V32.2 - Stable Fix)", page_icon="🏥", layout="wide")
+st.set_page_config(page_title="AI Hospital (V32.3 - Safe Mode)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
@@ -129,7 +129,7 @@ def get_logs():
         return pd.DataFrame(response.data)
     except: return pd.DataFrame()
 
-# --- GEMINI (V32.2 - PHỤC HỒI STABLE) ---
+# --- GEMINI (V32.3 - SAFE MODE) ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     if not api_key: return {"labels": [], "reasoning": "Thiếu API Key"}
     
@@ -138,8 +138,9 @@ def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     except: 
         return {"labels": [], "reasoning": "API Key không hợp lệ"}
 
-    # DANH SÁCH MODEL ỔN ĐỊNH (Bỏ bản Exp gây lỗi)
-    model_priority = ["gemini-1.5-flash", "gemini-1.5-pro"]
+    # DANH SÁCH AN TOÀN (Flash lên đầu vì ít lỗi 404 nhất)
+    # Thêm 'gemini-pro' (bản 1.0 cũ) vào cuối để fallback nếu thư viện quá cũ
+    model_priority = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
 
     labels_str = ", ".join(ALLOWED_LABELS) 
     tech_note = ", ".join(tags) if tags else "Chuẩn."
@@ -160,13 +161,13 @@ def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
             result["used_model"] = model_name
             return result
         except Exception as e:
-            last_error = str(e) # Lưu lỗi để debug
+            last_error = str(e)
             continue 
 
-    # NẾU THẤT BẠI, TRẢ VỀ LỖI CHI TIẾT ĐỂ HIỆN LÊN MÀN HÌNH
+    # NẾU TẤT CẢ ĐỀU THẤT BẠI
     return {
         "labels": [], 
-        "reasoning": f"⚠️ Lỗi kết nối Gemini: {last_error}. (Vui lòng kiểm tra lại API Key hoặc mạng)", 
+        "reasoning": f"⚠️ Lỗi kết nối Gemini (Hết Model khả dụng): {last_error}", 
         "used_model": "Failed"
     }
 
@@ -343,7 +344,6 @@ elif mode == "📂 Hội Chẩn (Cloud)":
             if selected_id:
                 record = df[df["id"] == selected_id].iloc[0]
                 
-                # --- LOAD ẢNH TRƯỚC (QUAN TRỌNG ĐỂ FIX LỖI GEMINI) ---
                 pil_img = None
                 if record.get('image_url'):
                     try:
@@ -363,7 +363,6 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         if record.get('ai_reasoning'):
                             with st.expander("🤖 Đọc kết quả Gemini cũ"): st.write(record.get('ai_reasoning'))
 
-                        # FORM NHẬP LIỆU
                         st.markdown("#### 📝 Thông tin Lâm sàng")
                         ctx = st.text_area("Bệnh cảnh:", value=record.get("clinical_context") or "", height=68)
                         note = st.text_area("Ý kiến chuyên gia:", value=record.get("expert_note") or "", height=68)
@@ -373,8 +372,7 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         def_tags = [t.strip() for t in tags_str.split(";")] if tags_str else []
                         tags = st.multiselect("Đánh giá Kỹ thuật:", TECHNICAL_OPTS, default=def_tags)
                         
-                        # --- NÚT HỎI GEMINI (ỔN ĐỊNH) ---
-                        if st.button("🧠 Hỏi lại Gemini (Model 1.5)"):
+                        if st.button("🧠 Hỏi lại Gemini (Safe Mode)"):
                             if not api_key: st.error("⚠️ Thiếu API Key!")
                             elif not pil_img: st.error("⚠️ Không tải được ảnh từ Cloud!")
                             else:
@@ -384,7 +382,7 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                                     model_used = res.get("used_model", "")
                                     
                                     if "Failed" in model_used:
-                                        st.error(txt) # Hiện lỗi chi tiết
+                                        st.error(txt) 
                                     elif txt:
                                         save_log({"id": selected_id, "ai_reasoning": txt})
                                         st.success(f"Đã cập nhật! (Model dùng: {model_used})")
