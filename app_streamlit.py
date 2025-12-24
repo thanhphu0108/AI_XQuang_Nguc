@@ -25,7 +25,7 @@ except ImportError:
     st.rerun()
 
 # ================= 1. CẤU HÌNH & CSS =================
-st.set_page_config(page_title="AI Hospital (V33.1 - JSON Data)", page_icon="💾", layout="wide")
+st.set_page_config(page_title="AI Hospital (V33.3 - Pro Prompt)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
@@ -42,29 +42,21 @@ st.markdown("""
     .conclusion-box { border: 2px solid #333; padding: 15px; margin-top: 20px; text-align: center; font-weight: bold; }
     .stButton>button { width: 100%; font-weight: bold; height: 45px; }
     
-    /* CHAT HISTORY STYLE (JSON VISUALIZER) */
-    .chat-card {
-        background-color: white;
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        padding: 15px;
-        margin-bottom: 15px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    .chat-meta { font-size: 12px; color: #666; margin-bottom: 8px; display: flex; justify-content: space-between; border-bottom: 1px solid #eee; padding-bottom: 5px;}
-    .chat-prompt { background-color: #f5f5f5; padding: 8px; border-radius: 4px; font-size: 13px; color: #333; font-family: monospace; margin-bottom: 10px; }
-    .chat-result { color: #002f6c; font-size: 14px; line-height: 1.5; }
-    .new-badge { background-color: #4caf50; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; }
+    /* CHAT HISTORY STYLE */
+    .chat-card { background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .chat-meta { font-size: 12px; color: #666; margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 5px; display: flex; justify-content: space-between; }
+    .chat-prompt { background: #f5f5f5; padding: 8px; font-size: 12px; font-family: monospace; color: #333; margin-bottom: 10px; border-radius: 4px; white-space: pre-wrap;}
+    .chat-result { color: #002f6c; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- TỪ ĐIỂN ---
 STRUCTURED_LABELS = [
-    "Phổi / Bình thường (Normal)", "Tim / Bóng tim to (Cardiomegaly)", "Phổi / Viêm phổi (Pneumonia)",
-    "Màng phổi / Tràn dịch (Effusion)", "Màng phổi / Tràn khí (Pneumothorax)", "Phổi / Nốt - Khối mờ",
-    "Phổi / Xơ hóa - Lao", "Xương / Gãy xương", "Màng phổi / Dày dính", "Khác / Bệnh lý khác"
+    "Bình thường (Normal)", "Bóng tim to (Cardiomegaly)", "Viêm phổi (Pneumonia)",
+    "Tràn dịch màng phổi (Effusion)", "Tràn khí màng phổi (Pneumothorax)", "U phổi / Nốt mờ (Nodule/Mass)",
+    "Xơ hóa / Lao phổi (Fibrosis/TB)", "Gãy xương (Fracture)", "Dày dính màng phổi (Pleural Thickening)", "Khác / Tạp âm (Other)"
 ]
-TECHNICAL_OPTS = ["✅ Phim đạt chuẩn", "⚠️ Chụp tại giường", "⚠️ Hít vào nông", "⚠️ Bệnh nhân xoay", "⚠️ Tia cứng/mềm", "⚠️ Dị vật/Áo"]
+TECHNICAL_OPTS = ["Phim đạt chuẩn kỹ thuật", "Chụp tại giường (AP)", "Hít vào nông (Không đủ sâu)", "Bệnh nhân xoay lệch", "Tia cứng", "Tia mềm", "Dị vật"]
 FEEDBACK_OPTS = ["Chưa đánh giá", "✅ Đồng thuận", "⚠️ Dương tính giả", "⚠️ Âm tính giả", "❌ Sai hoàn toàn"]
 RATING_OPTS = ["Tệ", "TB", "Khá", "Tốt", "Xuất sắc"]
 
@@ -124,43 +116,73 @@ def get_logs():
         return pd.DataFrame(response.data)
     except: return pd.DataFrame()
 
-# --- GEMINI ---
+# --- GEMINI (V33.3 - PROMPT CHUẨN Y KHOA) ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     if not api_key: return {"labels": [], "reasoning": "Thiếu API Key", "prompt": ""}
+    
     try:
         genai.configure(api_key=api_key)
-        target_model = "gemini-1.5-flash"
+        
+        # Auto-discover models & Anti-429 Strategy
+        model_priority = ["gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"]
         try:
-            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            candidates = [m for m in available_models if "gemini" in m]
-            if candidates:
-                if any("1.5-flash" in m for m in candidates): target_model = "gemini-1.5-flash"
-                else: target_model = candidates[0].replace("models/", "")
+            available = [m.name.replace("models/", "") for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            specials = [m for m in available if "2.5" in m or "exp" in m]
+            model_priority = specials + model_priority
         except: pass
-            
+        model_priority = list(dict.fromkeys(model_priority)) # Unique
+
         labels_str = ", ".join(STRUCTURED_LABELS) 
-        tech_note = ", ".join(tags) if tags else "Chuẩn."
+        tech_note = ", ".join(tags) if tags else "Phim đạt chuẩn kỹ thuật."
         
+        # --- PROMPT CHUẨN (SAO Y BẢN CHÍNH TỪ ẢNH BÁC GỬI) ---
         prompt = f"""
-        Role: Senior Radiologist.
-        INPUTS: 
-        - Clinical Context: "{context}"
-        - Expert Note: "{note}"
-        - Technical QA: "{tech_note}"
-        - Guidance: "{guide}"
-        
-        TASK: Analyze Chest X-ray. Select closest labels from: {labels_str}. Provide reasoning in Vietnamese.
-        OUTPUT JSON: {{ "labels": ["..."], "reasoning": "..." }}
+Vai trò: Bác sĩ chẩn đoán hình ảnh chuyên sâu (Senior Radiologist).
+
+==== 1. DỮ LIỆU ĐẦU VÀO ====
+- BỆNH CẢNH (Context): "{context}"
+- GHI CHÚ CHUYÊN GIA (Expert Note): "{note}"
+- HƯỚNG DẪN CỤ THỂ (Guidance): "{guide}"
+
+==== 2. ĐIỀU KIỆN KỸ THUẬT (QA/QC) QUAN TRỌNG ====
+- Trạng thái phim: {tech_note}
+(Lưu ý: Hãy cân nhắc các yếu tố kỹ thuật trên để tránh Dương tính giả/Âm tính giả. Ví dụ: Nếu hít không sâu, đừng đọc vội là tim to hay rốn phổi đậm trừ khi quá rõ ràng).
+
+==== 3. NHIỆM VỤ ====
+- Phân tích hình ảnh X-quang đính kèm.
+- Chọn nhãn bệnh lý chính xác từ danh sách: [{labels_str}].
+- Nếu bình thường, chọn 'Bình thường (Normal)'.
+
+OUTPUT JSON:
+{{
+  "labels": ["Label1", "Label2"],
+  "reasoning": "Biện luận chi tiết bằng tiếng Việt, có nhắc đến yếu tố kỹ thuật nêu ảnh hưởng đến chẩn đoán. Trình bày rõ ràng các mục: Mô tả (Tim, Phổi, Màng phổi...), Biện luận và Kết luận."
+}}
         """
         
-        model = genai.GenerativeModel(target_model)
-        response = model.generate_content([prompt, image], generation_config={"response_mime_type": "application/json"})
-        result = json.loads(response.text)
-        result["used_model"] = target_model
-        result["sent_prompt"] = prompt
-        return result
+        last_error = ""
+        for model_name in model_priority:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content([prompt, image], generation_config={"response_mime_type": "application/json"})
+                result = json.loads(response.text)
+                result["used_model"] = model_name
+                result["sent_prompt"] = prompt
+                return result
+            except Exception as e:
+                err_msg = str(e)
+                if "429" in err_msg:
+                    st.toast(f"⚠️ {model_name} hết lượt (429), thử model khác...", icon="⚡")
+                    time.sleep(1)
+                    continue
+                else:
+                    last_error = err_msg
+                    continue
+
+        return {"labels": [], "reasoning": f"Lỗi tất cả Model: {last_error}", "sent_prompt": prompt}
+
     except Exception as e:
-        return {"labels": [], "reasoning": f"Lỗi: {str(e)}", "sent_prompt": prompt}
+        return {"labels": [], "reasoning": f"Lỗi hệ thống: {str(e)}", "sent_prompt": ""}
 
 # --- HTML REPORT ---
 def generate_html_report(findings_input, has_danger, patient_info, img_id, gemini_history):
@@ -183,26 +205,34 @@ def generate_html_report(findings_input, has_danger, patient_info, img_id, gemin
     is_abnormal = has_danger or (len(findings_db.get("Lung", [])) + len(findings_db.get("Pleura", [])) + len(findings_db.get("Heart", [])) > 0)
     conclusion_html = """<div style='color:#c62828; font-size:18px;'>🔴 KẾT LUẬN: CÓ HÌNH ẢNH BẤT THƯỜNG</div>""" if is_abnormal else """<div style='color:#2e7d32; font-size:18px;'>✅ KẾT LUẬN: CHƯA GHI NHẬN BẤT THƯỜNG</div>"""
     
-    # Lấy ý kiến Gemini mới nhất từ List History
+    # Lấy kết quả mới nhất
     latest_reasoning = ""
     if isinstance(gemini_history, list) and len(gemini_history) > 0:
         latest_reasoning = gemini_history[0].get("response", "")
-    elif isinstance(gemini_history, str): # Fallback cho data cũ
-        latest_reasoning = gemini_history.split('---')[0]
+    elif isinstance(gemini_history, str):
+        try: 
+            json_hist = json.loads(gemini_history)
+            if isinstance(json_hist, list) and len(json_hist) > 0: latest_reasoning = json_hist[0].get("response", "")
+        except: latest_reasoning = gemini_history.split('---')[0]
 
-    gemini_block = f"""<div style="margin-top:15px; padding:10px; background:#fffde7; border:1px dashed orange; font-style:italic;"><b>🤖 Ý kiến Gemini (Mới nhất):</b><br>{latest_reasoning}</div>""" if latest_reasoning else ""
+    # Format lại text của Gemini để hiển thị đẹp hơn (Xuống dòng)
+    if latest_reasoning:
+        latest_reasoning = latest_reasoning.replace("\n", "<br>")
+
+    gemini_block = f"""<div style="margin-top:15px; padding:15px; background:#f1f8e9; border:1px solid #c5e1a5; border-radius:5px; font-size:14px; line-height:1.6;"><b>🤖 PHÂN TÍCH CHI TIẾT CỦA AI:</b><br>{latest_reasoning}</div>""" if latest_reasoning else ""
 
     html = f"""
     <div class="a4-paper">
         <div class="hospital-header"><h1>PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h1><p>Hệ thống AI Hỗ trợ Chẩn đoán X-quang Ngực</p></div>
         <table class="info-table"><tr><td style="width:60%;"><strong>Họ tên:</strong> {patient_info}</td><td style="text-align:right;"><strong>Mã HS:</strong> {img_id}</td></tr><tr><td><strong>Chỉ định:</strong> X-quang ngực thẳng (PA)</td><td style="text-align:right;"><strong>Ngày:</strong> {current_time}</td></tr></table>
-        <div class="section-title">I. MÔ TẢ HÌNH ẢNH</div>
+        <div class="section-title">I. MÔ TẢ HÌNH ẢNH (YOLO SCAN)</div>
         <strong>1. Nhu mô phổi:</strong>{lung_html}
         <strong>2. Màng phổi:</strong>{pleura_html}
         <strong>3. Tim - Trung thất:</strong>{heart_html}
         <strong>4. Hệ xương:</strong>{bone_html}
-        <div class="section-title">II. KẾT LUẬN</div>
-        <div class="conclusion-box">{conclusion_html}{gemini_block}</div>
+        <div class="section-title">II. KẾT LUẬN & TƯ VẤN</div>
+        <div class="conclusion-box">{conclusion_html}</div>
+        {gemini_block}
         <div style="text-align:center; font-style:italic; font-size:12px; margin-top:50px;">(Chữ ký bác sĩ chuyên khoa)<br><br><br><b>BS. Chẩn Đoán Hình Ảnh</b></div>
     </div>
     """
@@ -297,7 +327,7 @@ if mode == "🔍 Phân Tích & In Phiếu":
                             if api_key:
                                 res = ask_gemini(api_key, pil_img)
                                 gemini_txt = res.get("reasoning", "")
-                                # Lưu lần đầu dạng List JSON
+                                # Lưu lần đầu JSON
                                 if gemini_txt and supabase: 
                                     log_entry = [{
                                         "time": datetime.now().strftime("%H:%M %d/%m"),
@@ -305,7 +335,6 @@ if mode == "🔍 Phân Tích & In Phiếu":
                                         "response": gemini_txt,
                                         "model": res.get("used_model", "Unknown")
                                     }]
-                                    # Lưu JSON String
                                     save_log({"id": img_id, "ai_reasoning": json.dumps(log_entry)})
                             
                             html = generate_html_report(findings, danger, "Nguyễn Văn A", img_id, [ {"response": gemini_txt} ] if gemini_txt else [])
@@ -345,10 +374,9 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         
                         # --- XỬ LÝ LỊCH SỬ CHAT (JSON) ---
                         history_data = record.get('ai_reasoning', [])
-                        # Nếu là string cũ, convert sang list
                         if isinstance(history_data, str):
                             try: history_data = json.loads(history_data)
-                            except: history_data = [{"time": "Cũ", "response": history_data, "prompt": "N/A"}] if history_data else []
+                            except: history_data = [{"time": "Log cũ", "response": history_data, "prompt": "N/A", "model": "Unknown"}] if history_data else []
                         
                         if st.button("🧠 HỎI GEMINI (THÊM VÀO LOG)"):
                             if not api_key: st.error("⚠️ Thiếu API Key!")
@@ -365,22 +393,28 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                                             "response": txt,
                                             "model": res.get("used_model", "Unknown")
                                         }
-                                        # Thêm vào đầu list
                                         history_data.insert(0, new_entry)
-                                        # Lưu lại JSON
                                         save_log({"id": selected_id, "ai_reasoning": json.dumps(history_data)})
                                         st.success("Đã thêm vào Nhật ký!")
                                         time.sleep(0.5); st.rerun()
                                     else: st.error(f"Lỗi: {res}")
 
-                        # --- HIỂN THỊ LỊCH SỬ CHAT ---
+                        # --- HIỂN THỊ LỊCH SỬ CHAT (VISUALIZER) ---
                         st.markdown("---")
                         st.caption(f"📜 Nhật ký Hội chẩn ({len(history_data)} lượt)")
                         
                         for idx, item in enumerate(history_data):
-                            with st.expander(f"🤖 {item.get('time', 'N/A')} - {item.get('model', 'AI')}", expanded=(idx==0)):
-                                st.markdown(f'<div class="chat-prompt">❓ Prompt: {item.get("prompt", "")}</div>', unsafe_allow_html=True)
-                                st.markdown(f'<div class="chat-result">{item.get("response", "")}</div>', unsafe_allow_html=True)
+                            with st.container():
+                                st.markdown(f"""
+                                <div class="chat-card">
+                                    <div class="chat-meta">
+                                        <span>⏰ {item.get('time', 'N/A')}</span>
+                                        <span style="background:{'#4caf50' if idx==0 else '#9e9e9e'}; color:white; padding:2px 6px; border-radius:4px; font-size:10px;">{item.get('model', 'AI')}</span>
+                                    </div>
+                                    <div class="chat-prompt">❓ Prompt: {item.get("prompt", "")[:200]}...</div>
+                                    <div class="chat-result">🤖 {item.get("response", "")}</div>
+                                </div>
+                                """, unsafe_allow_html=True)
 
                         st.markdown("---")
                         st.markdown("#### 🏷️ Gán nhãn")
@@ -415,7 +449,6 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                     is_danger = record.get("result") == "BẤT THƯỜNG"
                     p_info = record.get("patient_info", "N/A")
                     
-                    # Lấy history để truyền vào
                     hist_data = record.get('ai_reasoning', [])
                     if isinstance(hist_data, str): 
                         try: hist_data = json.loads(hist_data)
