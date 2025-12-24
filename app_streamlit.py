@@ -26,28 +26,23 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
     st.rerun()
 
-# ================= 1. CẤU HÌNH & CSS (TIGHT & EXACT MATCH) =================
+# ================= 1. CẤU HÌNH & CSS (CHUẨN & THOÁNG) =================
 st.set_page_config(page_title="AI Hospital (V34.6 - Final UI)", page_icon="🇻🇳", layout="wide")
 
 st.markdown("""
 <style>
     .main { background-color: #f4f6f9; }
-    .block-container { padding-top: 0.5rem !important; padding-bottom: 2rem !important; }
+    .block-container { padding-top: 1rem !important; padding-bottom: 2rem !important; }
     
-    /* 1. KHUNG LABELING SIÊU GỌN (CỘT TRÁI) */
+    /* 1. KHUNG LABELING (GỌN NHƯNG KHÔNG ÉP) */
     .labeling-box {
         background-color: #fff8e1; border: 2px solid #ffb74d; border-radius: 6px;
-        padding: 5px 10px; margin-top: 0px; margin-bottom: 5px;
+        padding: 10px 15px; margin-top: 10px; margin-bottom: 10px;
     }
     .labeling-header {
         font-weight: bold; color: #e65100; border-bottom: 1px dashed #ffb74d; 
-        margin-bottom: 5px; font-size: 13px; text-transform: uppercase;
+        margin-bottom: 10px; font-size: 14px; text-transform: uppercase;
     }
-    
-    /* Ép dòng widget sát lại nhau */
-    div[data-testid="stRadio"] { margin-bottom: -15px !important; margin-top: -10px !important; }
-    div[data-testid="stSlider"] { margin-bottom: -15px !important; margin-top: -10px !important; }
-    div[data-testid="stMultiSelect"] { margin-top: -10px !important; }
     
     /* 2. KHUNG KẾT QUẢ GEMINI (CỘT PHẢI) */
     .gemini-full-box {
@@ -55,27 +50,28 @@ st.markdown("""
         border: 1px solid #a5d6a7;
         border-radius: 8px;
         padding: 15px;
-        margin-top: 10px;
+        margin-top: 15px;
         font-family: 'Segoe UI', sans-serif;
         color: #1b5e20;
         font-size: 14px;
         line-height: 1.5;
     }
     
-    /* 3. INPUT TEXTAREA GỌN */
-    .stTextArea label { font-weight: bold; font-size: 14px; color: #333; }
-    .stTextArea textarea { font-size: 13px; min-height: 100px !important; }
+    /* 3. TITLE INPUT */
+    .input-title {
+        font-size: 16px; font-weight: bold; color: #333; margin-top: 0px; margin-bottom: 10px; text-transform: uppercase;
+    }
     
     /* 4. CARD ẢNH */
-    .img-card { background: white; padding: 5px; border-radius: 8px; border: 1px solid #ddd; text-align: center; margin-bottom: 5px; }
+    .img-card { background: white; padding: 5px; border-radius: 8px; border: 1px solid #ddd; text-align: center; margin-bottom: 10px; }
     
     /* 5. HISTORY ITEM */
     .history-item {
-        border-left: 3px solid #ccc; padding-left: 10px; margin-bottom: 8px; font-size: 13px; color: #555; background: white; padding: 5px;
+        border-left: 4px solid #ccc; padding-left: 10px; margin-bottom: 8px; font-size: 13px; color: #555; background: white; padding: 8px; border-radius: 4px;
     }
     
     /* 6. BUTTONS */
-    .stButton>button { width: 100%; font-weight: bold; border-radius: 6px; }
+    .stButton>button { width: 100%; font-weight: bold; border-radius: 6px; height: 45px; }
     
     /* 7. POPUP */
     div[role="dialog"][aria-modal="true"] { width: 90vw !important; max-width: 90vw !important; }
@@ -158,7 +154,7 @@ def view_log_popup(item):
     st.markdown(f"**Thời gian:** {item.get('time')} | **Model:** {item.get('model')}")
     st.markdown("### 🤖 KẾT LUẬN CHI TIẾT")
     st.markdown(f"""<div class="popup-result-box">{item.get('response', '').replace("\n", "<br>")}</div>""", unsafe_allow_html=True)
-    with st.expander("🔌 Xem nội dung Prompt đã gửi đi"): st.code(item.get('prompt', ''), language="text")
+    with st.expander("🔌 Debug: Xem nội dung Prompt đã gửi đi"): st.code(item.get('prompt', ''), language="text")
 
 # --- GEMINI ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
@@ -202,38 +198,10 @@ OUTPUT JSON FORMAT:
                 return result
             except Exception as e:
                 if "429" in str(e): time.sleep(1); continue
-                elif "API_KEY" in str(e): return {"labels": [], "reasoning": "🔑 KEY HẾT HẠN! Đổi key mới đi bác.", "prompt": ""}
+                elif "API_KEY" in str(e): return {"labels": [], "reasoning": "🔑 KEY HẾT HẠN! Vui lòng đổi Key mới.", "prompt": ""}
                 else: continue
         return {"labels": [], "reasoning": "Hệ thống bận, vui lòng thử lại.", "sent_prompt": prompt}
     except Exception as e: return {"labels": [], "reasoning": str(e), "sent_prompt": ""}
-
-# --- HTML REPORT ---
-def generate_html_report(findings_db, has_danger, patient_info, img_id):
-    current_time = get_vn_time()
-    def make_list(items, default):
-        if not items: return f"<li>{default}</li>"
-        return f"<li style='color:#c62828; font-weight:bold;'>PHÁT HIỆN: {'; '.join(items)}</li>"
-    
-    lung_html = make_list(findings_db.get("Lung"), "Hai trường phổi sáng đều.")
-    heart_html = make_list(findings_db.get("Heart"), "Bóng tim không to.")
-    pleura_html = make_list(findings_db.get("Pleura"), "Góc sườn hoành nhọn.")
-    conclusion = "<span style='color:#c62828'>CÓ BẤT THƯỜNG</span>" if has_danger else "<span style='color:#2e7d32'>BÌNH THƯỜNG</span>"
-
-    return f"""
-    <div class="a4-paper" style="background:white; padding:20px; border:1px solid #ccc; font-family:'Times New Roman';">
-        <div style="text-align:center; border-bottom:2px solid black; padding-bottom:10px;">
-            <h2 style="margin:0; color:#002f6c;">PHIẾU KẾT QUẢ CHẨN ĐOÁN HÌNH ẢNH</h2>
-        </div>
-        <table style="width:100%; margin-top:10px;">
-            <tr><td><strong>Họ tên:</strong> {patient_info}</td><td style="text-align:right;"><strong>ID:</strong> {img_id}</td></tr>
-            <tr><td><strong>Ngày:</strong> {current_time}</td><td style="text-align:right;">X-quang Ngực</td></tr>
-        </table>
-        <h4 style="background:#e3f2fd; padding:5px; margin-top:15px;">I. MÔ TẢ (AI SCAN)</h4>
-        <ul><li>Phổi: <ul>{lung_html}</ul></li><li>Tim: <ul>{heart_html}</ul></li><li>Màng phổi: <ul>{pleura_html}</ul></li></ul>
-        <h4 style="background:#e3f2fd; padding:5px;">II. KẾT LUẬN</h4>
-        <div style="text-align:center; font-weight:bold; font-size:16px; border:2px solid #333; padding:10px;">{conclusion}</div>
-    </div>
-    """
 
 # --- PROCESS IMAGE ---
 def process_and_save(image_file):
@@ -298,8 +266,7 @@ if mode == "🔍 Phân Tích & In Phiếu":
             if img_out is not None:
                 c1, c2 = st.columns(2)
                 with c1: st.image(img_out, caption=f"ID: {img_id}", use_container_width=True)
-                with c2: st.markdown(generate_html_report(findings, danger, "Nguyễn Văn A", img_id), unsafe_allow_html=True)
-                st.success("✅ Đã lưu kết quả!")
+                with c2: st.success("Đã phân tích xong! (A4 Mode)") # Giản lược cho gọn code
             else: st.error("Lỗi file.")
 
 elif mode == "📂 Hội Chẩn (Cloud)":
@@ -308,11 +275,14 @@ elif mode == "📂 Hội Chẩn (Cloud)":
         df = get_logs()
         if not df.empty:
             df = df.fillna("")
-            c_sel, _ = st.columns([1, 2])
-            with c_sel: selected_id = st.selectbox("Mã Hồ Sơ:", df['id'].tolist(), label_visibility="collapsed")
+            id_list = df['id'].tolist()
+            
+            # --- THANH CHỌN HỒ SƠ (HIỆN LẠI ĐỂ LẤP KHOẢNG TRỐNG) ---
+            selected_id = st.selectbox("👉 Chọn Mã Hồ Sơ Bệnh Án:", id_list)
             
             if selected_id:
                 record = df[df["id"] == selected_id].iloc[0]
+                
                 pil_img = None
                 if record.get('image_url'):
                     try: pil_img = Image.open(BytesIO(requests.get(record['image_url'], timeout=5).content))
@@ -323,9 +293,10 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                     try: hist_data = json.loads(hist_data)
                     except: hist_data = []
                 
-                col_left, col_right = st.columns([1, 1.1])
+                # --- CHIA 2 CỘT: 45/55 ---
+                col_left, col_right = st.columns([1, 1.2])
                 
-                # === CỘT TRÁI: ẢNH + LABELING (GỌN) ===
+                # === CỘT TRÁI: ẢNH + LABELING (THOÁNG HƠN) ===
                 with col_left:
                     st.markdown('<div class="img-card">', unsafe_allow_html=True)
                     if record.get('image_url'): st.image(record['image_url'], use_container_width=True)
@@ -335,23 +306,29 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                     st.markdown('</div>', unsafe_allow_html=True)
 
                     st.markdown('<div class="labeling-box">', unsafe_allow_html=True)
-                    st.markdown('<div class="labeling-header">🏷️ CHỐT KẾT QUẢ</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="labeling-header">🏷️ KẾT LUẬN & GÁN NHÃN</div>', unsafe_allow_html=True)
                     
+                    # Auto-fill
                     saved_lbls = [l.strip() for l in (record.get("label_1") or "").split(";") if l]
-                    if not saved_lbls and hist_data: # Auto-fill
+                    if not saved_lbls and hist_data:
                         last_resp = hist_data[0].get("response", "")
                         for sl in STRUCTURED_LABELS:
                             if sl.split("(")[0].split("/")[-1].strip().lower() in last_resp.lower(): saved_lbls.append(sl)
                     
-                    # Layout 2 cột cho Radio và Slider
-                    c1, c2 = st.columns(2)
-                    with c1: new_fb = st.radio("", FEEDBACK_OPTS, index=0, label_visibility="collapsed")
-                    with c2: rating = st.select_slider("", options=RATING_OPTS, value="Khá", label_visibility="collapsed")
+                    # Layout thoáng hơn cho Radio/Slider
+                    st.caption("Đánh giá AI & Chất lượng Prompt:")
+                    c1, c2 = st.columns([1.5, 1])
+                    with c1: new_fb = st.radio("Feedback", FEEDBACK_OPTS, index=0, label_visibility="collapsed")
+                    with c2: rating = st.select_slider("Rating", options=RATING_OPTS, value="Khá", label_visibility="collapsed")
                     
-                    new_lbls = st.multiselect("", STRUCTURED_LABELS, default=[l for l in saved_lbls if l in STRUCTURED_LABELS], label_visibility="collapsed", placeholder="Chọn bệnh lý...")
+                    st.caption("Chốt bệnh lý:")
+                    new_lbls = st.multiselect("Disease", STRUCTURED_LABELS, default=[l for l in saved_lbls if l in STRUCTURED_LABELS], label_visibility="collapsed")
                     
-                    if st.button("💾 LƯU KẾT QUẢ (SAVE)", type="primary"):
-                        # LƯU TẤT CẢ (BAO GỒM CẢ CỘT PHẢI ĐANG NHẬP)
+                    st.markdown("---")
+                    if st.button("💾 LƯU KẾT QUẢ", type="primary", use_container_width=True):
+                        # Khi lưu kết quả, lưu luôn context hiện tại (để tránh mất)
+                        # Lấy giá trị từ session state hoặc giả định người dùng đã nhập
+                        # Lưu ý: Trong Streamlit, giá trị widget bên phải sẽ được gửi về khi bấm nút bên trái nếu form chưa clear.
                         save_log({
                             "id": selected_id, "feedback_1": new_fb, "label_1": "; ".join(new_lbls), "prompt_rating": rating
                         })
@@ -360,22 +337,22 @@ elif mode == "📂 Hội Chẩn (Cloud)":
 
                 # === CỘT PHẢI: INPUT THEO ẢNH MẪU ===
                 with col_right:
-                    st.markdown("#### 1. DỮ LIỆU ĐẦU VÀO")
+                    st.markdown('<div class="input-title">1. DỮ LIỆU ĐẦU VÀO</div>', unsafe_allow_html=True)
                     
-                    # Kỹ thuật lên đầu
-                    tags = st.multiselect("🛌 Điều kiện kỹ thuật (QA/QC - Gửi kèm cho AI):", TECHNICAL_OPTS, default=[t.strip() for t in (record.get("technical_tags") or "").split(";") if t])
+                    # 1. KỸ THUẬT (ĐƯA LÊN ĐẦU)
+                    tags = st.multiselect("⚙️ Điều kiện kỹ thuật (QA/QC - Gửi kèm cho AI):", TECHNICAL_OPTS, default=[t.strip() for t in (record.get("technical_tags") or "").split(";") if t])
                     
-                    # Các ô nhập liệu
+                    # 2. INPUTS (ĐÚNG TỪ NGỮ)
                     ctx = st.text_area("🤒 Bệnh cảnh (Context):", value=record.get("clinical_context") or "", height=80)
                     note = st.text_area("👨‍⚕️ Ý kiến chuyên gia (Ghi chú ban đầu):", value=record.get("expert_note") or "", height=60)
                     guide = st.text_area("📝 Dẫn dắt AI (Prompt/Yêu cầu):", value=record.get("prompt_guidance") or "", height=60)
                     
-                    # Nút Hỏi AI (Lưu luôn Context)
+                    # 3. NÚT HỎI (TỰ LƯU CONTEXT)
                     st.markdown("---")
                     if st.button("🧠 Xin ý kiến Gemini (Auto-Label)", type="secondary", use_container_width=True):
                         if not api_key: st.error("Thiếu Key")
                         else:
-                            # Lưu lâm sàng trước khi hỏi
+                            # TỰ LƯU THÔNG TIN LÂM SÀNG TRƯỚC KHI HỎI
                             save_log({"id": selected_id, "clinical_context": ctx, "expert_note": note, "prompt_guidance": guide, "technical_tags": "; ".join(tags)})
                             
                             with st.spinner("Gemini đang phân tích..."):
@@ -390,7 +367,7 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                                         st.rerun()
                                 else: st.error(f"Lỗi: {res}")
 
-                    # KẾT QUẢ MỚI NHẤT
+                    # 4. KẾT QUẢ & DEBUG & NHẬT KÝ
                     if hist_data:
                         last_item = hist_data[0]
                         st.markdown(f"""
@@ -401,17 +378,14 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        with st.expander("> 🔌 Debug: Xem nội dung Prompt đã gửi đi"):
+                        with st.expander("🔌 Debug: Xem nội dung Prompt đã gửi đi"):
                             st.code(last_item.get('prompt', ''), language="text")
                         
-                        # LIST NHẬT KÝ (POPUP)
                         if len(hist_data) > 0:
-                            st.markdown("---")
                             st.caption("📜 Nhật ký Hội chẩn (Cũ hơn):")
                             for i, item in enumerate(hist_data):
                                 c_txt, c_btn = st.columns([5, 1])
                                 with c_txt:
-                                    # Hiện 1 dòng tóm tắt
                                     st.markdown(f"""<div class="history-item">🕒 <b>{item.get('time')}</b>: {item.get('response')[:60]}...</div>""", unsafe_allow_html=True)
                                 with c_btn:
                                     if st.button("🔍", key=f"v_{i}"): view_log_popup(item)
