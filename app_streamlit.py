@@ -148,10 +148,10 @@ def get_logs():
     try: return pd.DataFrame(supabase.table("logs").select("*").order("created_at", desc=True).execute().data)
     except: return pd.DataFrame()
 
-@st.dialog("📋 CHI TIẾT HỘI CHẨN (FULL SCREEN)", width="large")
+@st.dialog("📋 CHI TIẾT", width="large")
 def view_log_popup(item):
     st.markdown(f"**Thời gian:** {item.get('time')} | **Model:** {item.get('model')}")
-    st.markdown("### 🤖 KẾT LUẬN CHI TIẾT")
+    st.markdown("### 🤖 KẾT LUẬN")
     st.markdown(f"""<div class="popup-result-box">{item.get('response', '').replace("\n", "<br>")}</div>""", unsafe_allow_html=True)
     with st.expander("🔌 Xem Prompt"): st.code(item.get('prompt', ''), language="text")
 
@@ -289,9 +289,9 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3063/3063176.png", width=60)
     st.title("ĐIỀU KHIỂN")
     api_key = st.text_input("🔑 Gemini API Key:", value=st.secrets.get("GEMINI_API_KEY", ""), type="password")
-    mode = st.radio("Menu:", ["🔍 Phân Tích & In Phiếu", "📂 Hội Chẩn (Cloud)", "🛠️ Xuất Dataset (Admin)"])
+    mode = st.radio("Menu:", ["🔍 AI nội bộ", "📂 AI Gemini + Dán nhãn", "🛠️ Xuất Dataset (Admin)"])
 
-if mode == "🔍 Phân Tích & In Phiếu":
+if mode == "🔍 AI nội bộ":
     st.title("🏥 Hệ thống AI hỗ trợ phân tích X-quang ngực")
     uploaded_file = st.file_uploader("Chọn ảnh X-quang:", type=["jpg", "png", "jpeg", "dcm"])
     if uploaded_file and st.button("🚀 PHÂN TÍCH"):
@@ -332,7 +332,7 @@ elif mode == "📂 AI Gemini + Dán nhãn":
                     st.caption(f"YOLO: {record.get('result')} | BN: {record.get('patient_info')}")
                     st.markdown('</div>', unsafe_allow_html=True)
                     if len(hist_data) > 0:
-                        st.markdown('<div class="labeling-header">📜 NHẬT KÝ HỘI CHẨN</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="labeling-header">📜 NHẬT KÝ</div>', unsafe_allow_html=True)
                         st.markdown('<div class="history-container">', unsafe_allow_html=True)
                         for i, item in enumerate(hist_data):
                             c_txt, c_btn = st.columns([5, 1])
