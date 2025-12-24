@@ -26,8 +26,8 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
     st.rerun()
 
-# ================= 1. CẤU HÌNH & CSS (FIX ADMIN SELECT) =================
-st.set_page_config(page_title="AI Hospital (V35.1 - Fix API)", page_icon="🏥", layout="wide")
+# ================= 1. CẤU HÌNH & CSS (AUTO DETECT MODEL) =================
+st.set_page_config(page_title="AI Hospital (V35.3 - Auto AI)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
@@ -144,14 +144,36 @@ def view_log_popup(item):
     st.markdown(f"""<div class="popup-result-box">{item.get('response', '').replace("\n", "<br>")}</div>""", unsafe_allow_html=True)
     with st.expander("🔌 Xem Prompt"): st.code(item.get('prompt', ''), language="text")
 
-# --- GEMINI (FIX LỖI 404 - DÙNG MODEL MỚI NHẤT) ---
+# --- GEMINI (AUTO DETECT MODEL) ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
     if not api_key: return {"labels": [], "reasoning": "Thiếu API Key", "prompt": ""}
+    
     try:
         genai.configure(api_key=api_key)
-        # CẬP NHẬT LIST MODEL: Bỏ gemini-pro cũ, dùng 1.5 Flash (nhanh) và 1.5 Pro (thông minh)
-        model_priority = ["gemini-1.5-flash", "gemini-1.5-pro"]
         
+        # --- BƯỚC 1: TỰ ĐỘNG TÌM MODEL NGON ---
+        try:
+            available_models = []
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods and 'gemini' in m.name:
+                    available_models.append(m.name)
+            
+            # Sắp xếp ưu tiên: Flash -> Pro -> 1.5 -> các cái khác
+            # Logic: Tìm cái nào có 'flash' đưa lên đầu, sau đó đến 'pro'
+            available_models.sort(key=lambda x: (
+                0 if '1.5-flash' in x else 
+                1 if '1.5-pro' in x else 
+                2 if 'flash' in x else 
+                3 if 'pro' in x else 4
+            ))
+            
+            model_priority = available_models if available_models else ["models/gemini-1.5-flash"]
+            
+        except:
+            # Fallback nếu không list được (mạng chặn)
+            model_priority = ["models/gemini-1.5-flash", "models/gemini-1.5-pro"]
+
+        # --- BƯỚC 2: GỌI API ---
         labels_str = ", ".join(STRUCTURED_LABELS) 
         tech_note = ", ".join(tags) if tags else "Phim đạt chuẩn kỹ thuật."
         prompt = f"""
@@ -171,13 +193,12 @@ OUTPUT JSON: {{ "labels": ["..."], "reasoning": "VIẾT THEO CẤU TRÚC: Kỹ t
                 model = genai.GenerativeModel(model_name)
                 response = model.generate_content([prompt, image], generation_config={"response_mime_type": "application/json"})
                 result = json.loads(response.text)
-                result["used_model"] = model_name
+                result["used_model"] = model_name # Lưu tên model thực tế chạy được
                 result["sent_prompt"] = prompt
                 return result
             except Exception as e:
                 err_msg = str(e)
                 if "429" in err_msg: time.sleep(1); continue
-                elif "API_KEY" in err_msg: return {"labels": [], "reasoning": "🔑 KEY HẾT HẠN HOẶC SAI!", "prompt": ""}
                 else: last_error = err_msg; continue
         
         return {"labels": [], "reasoning": f"⚠️ Lỗi kết nối (RAW): {last_error}", "sent_prompt": prompt}
@@ -312,8 +333,6 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                     except: hist_data = []
                 
                 col_left, col_right = st.columns([1, 1.2])
-                
-                # === CỘT TRÁI ===
                 with col_left:
                     st.markdown('<div class="img-card">', unsafe_allow_html=True)
                     if record.get('image_url'): st.image(record['image_url'], use_container_width=True)
@@ -332,7 +351,6 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         st.markdown('</div>', unsafe_allow_html=True)
                     else: st.info("Chưa có lịch sử.")
 
-                # === CỘT PHẢI ===
                 with col_right:
                     st.markdown('<div class="labeling-header">1. DỮ LIỆU ĐẦU VÀO</div>', unsafe_allow_html=True)
                     tags = st.multiselect("⚙️ Điều kiện kỹ thuật (QA/QC):", TECHNICAL_OPTS, default=[t.strip() for t in (record.get("technical_tags") or "").split(";") if t])
@@ -345,7 +363,7 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         if not api_key: st.error("Thiếu Key")
                         else:
                             save_log({"id": selected_id, "clinical_context": ctx, "expert_note": note, "prompt_guidance": guide, "technical_tags": "; ".join(tags)})
-                            with st.spinner("Gemini đang phân tích..."):
+                            with st.spinner("Gemini đang dò tìm Model tốt nhất..."):
                                 res = ask_gemini(api_key, pil_img, ctx, note, guide, tags)
                                 txt = res.get("reasoning", "")
                                 if txt:
@@ -364,7 +382,6 @@ elif mode == "📂 Hội Chẩn (Cloud)":
 
                     st.markdown('<div class="labeling-box">', unsafe_allow_html=True)
                     st.markdown('<div class="labeling-header">🏷️ KẾT LUẬN & GÁN NHÃN</div>', unsafe_allow_html=True)
-                    
                     saved_lbls = [l.strip() for l in (record.get("label_1") or "").split(";") if l]
                     if not saved_lbls and hist_data:
                         last_resp = hist_data[0].get("response", "")
@@ -389,30 +406,31 @@ elif mode == "🛠️ Xuất Dataset (Admin)":
     if pwd and check_password(pwd):
         df = get_logs()
         if not df.empty:
-            # --- TÍNH NĂNG MỚI: CHỌN ĐỂ TẢI ---
             st.markdown("### 📋 Chọn các hồ sơ muốn xuất:")
-            # Thêm cột "Chọn" mặc định là False
             if "Select" not in df.columns: df.insert(0, "Select", False)
             
-            # Data Editor để tick chọn
+            # --- FIX: DÙNG KEY ĐỂ GIỮ STATE ---
             edited_df = st.data_editor(
                 df,
-                column_config={"Select": st.column_config.CheckboxColumn("Chọn", help="Tích để tải", default=False), "image_url": st.column_config.ImageColumn("Ảnh")},
+                column_config={"Select": st.column_config.CheckboxColumn("Chọn", default=False), "image_url": st.column_config.ImageColumn("Ảnh")},
                 disabled=df.columns.drop("Select"),
                 hide_index=True,
-                use_container_width=True
+                use_container_width=True,
+                key="editor_select"
             )
             
-            # Lọc ra các dòng đã chọn
-            selected_rows = edited_df[edited_df.Select]
+            # LỌC DÒNG ĐÃ CHỌN - PHIÊN BẢN FIX 35.2
+            # Lưu ý: edited_df là dataframe đã được user tương tác
+            selected_rows = edited_df[edited_df["Select"] == True]
             
-            st.caption(f"Đã chọn: {len(selected_rows)} hồ sơ.")
+            st.info(f"👉 Đang chọn: {len(selected_rows)} hồ sơ.")
             
             if 'zip_btn' not in st.session_state: st.session_state.zip_btn = None
             
-            if st.button(f"🚀 ĐÓNG GÓI {len(selected_rows)} HỒ SƠ ĐÃ CHỌN"):
+            # NÚT TẠO ZIP
+            if st.button(f"🚀 ĐÓNG GÓI {len(selected_rows)} HỒ SƠ (Reset Zip cũ)"):
                 if len(selected_rows) == 0:
-                    st.warning("Vui lòng chọn ít nhất 1 hồ sơ!")
+                    st.warning("Vui lòng chọn ít nhất 1 dòng!")
                 else:
                     with st.spinner("Đang tải và nén..."):
                         buf = BytesIO()
@@ -426,7 +444,10 @@ elif mode == "🛠️ Xuất Dataset (Admin)":
                                         zf.writestr(f"labels/{r['id']}.txt", txt)
                                     except: pass
                         st.session_state.zip_btn = buf.getvalue()
-                        st.rerun()
+                        st.success("Đã tạo file mới xong! Bấm tải về bên dưới.")
+                        # Không rerun ngay lập tức ở đây để tránh mất trạng thái checkbox (nếu muốn)
+                        # Nhưng để hiện nút tải thì cần rerun hoặc cập nhật UI
+                        st.rerun() 
             
             if st.session_state.zip_btn:
                 st.download_button("📥 TẢI XUỐNG NGAY (ZIP)", st.session_state.zip_btn, "dataset_selected.zip", "application/zip", type="primary")
