@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import os
+import torch  # <--- ĐÃ BỔ SUNG THƯ VIỆN NÀY
 import time
 from datetime import datetime
 from PIL import Image
@@ -57,6 +58,7 @@ DOCTOR_ROSTER = {
 # ================= 2. CORE FUNCTIONS =================
 @st.cache_resource
 def load_models():
+    # Dòng này gây lỗi trước đó nếu thiếu import torch
     device = 0 if torch.cuda.is_available() else 'cpu'
     loaded_models = {}
     for role, filename in DOCTOR_ROSTER.items():
