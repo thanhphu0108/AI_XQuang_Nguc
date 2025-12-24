@@ -26,31 +26,37 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
     st.rerun()
 
-# ================= 1. CẤU HÌNH & CSS =================
-st.set_page_config(page_title="AI Hospital (V33.8 - Popup UI)", page_icon="🏥", layout="wide")
+# ================= 1. CẤU HÌNH & CSS (CÓ POPUP TO BỰ) =================
+st.set_page_config(page_title="AI Hospital (V33.9 - Big Popup)", page_icon="🏥", layout="wide")
 
 st.markdown("""
 <style>
     .main { background-color: #f4f6f9; }
     
-    /* KHUNG KẾT QUẢ GEMINI (NẰM DƯỚI NÚT) */
-    .gemini-result-zone {
-        background-color: #e8f5e9;
-        border: 1px solid #c8e6c9;
-        border-radius: 8px;
-        padding: 15px;
-        margin-top: 15px;
-        margin-bottom: 20px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    .gemini-result-zone h4 {
-        margin-top: 0; color: #2e7d32; font-weight: bold; font-size: 15px; 
-        border-bottom: 2px solid #a5d6a7; padding-bottom: 8px; margin-bottom: 10px;
-    }
-    .gemini-content {
-        font-family: 'Segoe UI', sans-serif; font-size: 14px; color: #1b5e20; line-height: 1.6;
+    /* --- HACK CSS CHO POPUP (DIALOG) TO 80% --- */
+    div[data-testid="stModal"] div[role="dialog"] {
+        width: 90vw !important; /* Chiếm 90% chiều ngang màn hình */
+        max-width: 90vw !important;
+        min-width: 80vw !important;
     }
     
+    /* Giao diện nội dung trong Popup */
+    .popup-result {
+        background-color: #f1f8e9;
+        border: 2px solid #81c784;
+        padding: 20px;
+        border-radius: 10px;
+        color: #1b5e20;
+        font-family: 'Segoe UI', sans-serif;
+        font-size: 15px;
+        line-height: 1.6;
+        margin-bottom: 20px;
+    }
+    .popup-header {
+        font-size: 18px; font-weight: bold; color: #2e7d32; 
+        border-bottom: 2px solid #a5d6a7; padding-bottom: 10px; margin-bottom: 15px;
+    }
+
     /* CARD STYLE */
     .sci-card {
         background-color: white;
@@ -65,15 +71,17 @@ st.markdown("""
         margin-bottom: 10px; border-bottom: 1px dashed #eee; padding-bottom: 5px;
     }
     
+    /* GEMINI PREVIEW (Dưới nút) */
+    .gemini-result-zone {
+        background-color: #e3f2fd; border: 1px solid #90caf9; border-radius: 8px; padding: 15px; margin-top: 15px; margin-bottom: 20px;
+    }
+    .gemini-content { font-size: 13px; color: #0d47a1; line-height: 1.5; max-height: 300px; overflow-y: auto; }
+    
     .labeling-zone { border-left: 4px solid #ff9800 !important; background-color: #fff8e1 !important; }
     .stButton>button { width: 100%; font-weight: bold; height: 45px; }
     
-    /* Chat row compact */
-    .chat-row { 
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 8px; border-bottom: 1px solid #eee; font-size: 13px;
-    }
-    .chat-row:hover { background-color: #f5f5f5; }
+    .chat-row { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid #eee; font-size: 13px; }
+    .chat-row:hover { background-color: #f5f5f5; cursor: pointer; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -148,16 +156,24 @@ def get_logs():
         return pd.DataFrame(response.data)
     except: return pd.DataFrame()
 
-# --- POPUP DIALOG (MỚI) ---
-@st.dialog("📜 CHI TIẾT HỘI CHẨN")
+# --- POPUP DIALOG (V33.9 - BIG SIZE) ---
+@st.dialog("📋 CHI TIẾT HỘI CHẨN (TOÀN MÀN HÌNH)")
 def view_log_popup(item):
+    # CSS Hack đã làm việc ở trên để width=90vw
+    
     st.caption(f"🕒 Thời gian: {item.get('time')} | Model: {item.get('model')}")
     
-    st.markdown("### ❓ Câu hỏi (Prompt)")
-    st.info(item.get('prompt', 'Không có nội dung'))
+    # 1. KẾT QUẢ CHÍNH (ƯU TIÊN HIỆN TO)
+    st.markdown(f"""
+    <div class="popup-result">
+        <div class="popup-header">🤖 KẾT QUẢ PHÂN TÍCH</div>
+        {item.get('response', 'Chưa có nội dung').replace("\n", "<br>")}
+    </div>
+    """, unsafe_allow_html=True)
     
-    st.markdown("### 🤖 Trả lời (Response)")
-    st.success(item.get('response', 'Không có nội dung'))
+    # 2. PROMPT (ẨN VÀO EXPANDER ĐỂ GỌN)
+    with st.expander("🔍 Xem lại Câu lệnh Prompt (Dành cho Kỹ thuật)"):
+        st.code(item.get('prompt', ''), language="text")
 
 # --- GEMINI ---
 def ask_gemini(api_key, image, context="", note="", guide="", tags=[]):
@@ -207,7 +223,7 @@ OUTPUT JSON FORMAT:
                 err_str = str(e)
                 if "429" in err_str: time.sleep(1); continue
                 elif "API_KEY_INVALID" in err_str or "expired" in err_str:
-                    return {"labels": [], "reasoning": "🔑 KEY HẾT HẠN! Vui lòng lấy Key mới tại aistudio.google.com", "prompt": ""}
+                    return {"labels": [], "reasoning": "🔑 KEY HẾT HẠN! Vui lòng đổi Key mới.", "prompt": ""}
                 else: last_error = err_str; continue
 
         return {"labels": [], "reasoning": f"Lỗi: {last_error}", "sent_prompt": prompt}
@@ -394,11 +410,12 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                                         time.sleep(0.5); st.rerun()
                                 else: st.error(f"Lỗi: {res}")
 
-                    # Hiển thị kết quả mới nhất ngay dưới nút
+                    # --- RESULT ZONE ---
                     if hist_data:
                         last_item = hist_data[0]
                         model = last_item.get('model', 'Gemini')
                         resp = last_item.get('response', '').replace("\n", "<br>")
+                        
                         st.markdown(f"""
                         <div class="gemini-result-zone">
                             <h4>🤖 KẾT QUẢ MỚI NHẤT ({model})</h4>
@@ -406,8 +423,9 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                         </div>
                         """, unsafe_allow_html=True)
                         
+                        # Show History
                         with st.expander("📜 Lịch sử cũ hơn"):
-                            for i, item in enumerate(hist_data[1:]): # Bỏ cái đầu tiên (đã hiện)
+                            for i, item in enumerate(hist_data[1:]): # Bỏ cái đầu
                                 c_txt, c_btn = st.columns([4, 1])
                                 with c_txt:
                                     st.markdown(f"<b>{item.get('time')}</b>: {item.get('response')[:50]}...", unsafe_allow_html=True)
@@ -415,8 +433,8 @@ elif mode == "📂 Hội Chẩn (Cloud)":
                                     if st.button("🔍", key=f"view_old_{i}"):
                                         view_log_popup(item)
                     
-                    # Nút xem full cho cái mới nhất (nếu muốn xem prompt)
-                    if hist_data and st.button("🔍 Xem chi tiết (Prompt + Full Text)"):
+                    # Nút xem full TOÀN MÀN HÌNH
+                    if hist_data and st.button("🔍 XEM POPUP (TOÀN MÀN HÌNH)"):
                         view_log_popup(hist_data[0])
 
         else: st.warning("📭 Database trống.")
